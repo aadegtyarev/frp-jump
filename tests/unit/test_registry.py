@@ -34,6 +34,29 @@ def test_create_enroll_token_rejects_duplicate_device_name(db_session) -> None:
         )
 
 
+def test_create_enroll_token_rejects_duplicate_name_while_unredeemed_token_exists(
+    db_session,
+) -> None:
+    admin = _make_admin(db_session)
+    registry.create_enroll_token(
+        db_session, device_name_hint="wb01", created_by=admin.id, ttl=_TTL
+    )
+    with pytest.raises(registry.ConflictError):
+        registry.create_enroll_token(
+            db_session, device_name_hint="wb01", created_by=admin.id, ttl=_TTL
+        )
+
+
+def test_create_enroll_token_allows_reissue_after_the_first_is_redeemed(db_session) -> None:
+    admin = _make_admin(db_session)
+    _enroll(db_session, admin, "wb01")
+    with pytest.raises(registry.ConflictError):
+        # already enrolled -- the *device* name check, not the token one
+        registry.create_enroll_token(
+            db_session, device_name_hint="wb01", created_by=admin.id, ttl=_TTL
+        )
+
+
 def test_redeem_enroll_token_creates_device_and_api_token(db_session) -> None:
     admin = _make_admin(db_session)
     enrolled = _enroll(db_session, admin, "wb01")
@@ -160,6 +183,42 @@ def test_exposed_and_consumed_grant_views(db_session) -> None:
 
     assert registry.exposed_grants_for_device(db_session, consumer.device.id) == []
     assert registry.consumed_grants_for_device(db_session, exposer.device.id) == []
+
+
+def test_list_services_view_includes_device_name(db_session) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    registry.create_service(
+        db_session,
+        device_id=exposer.device.id,
+        name="wb01-ssh",
+        protocol=ServiceProtocol.SSH,
+        target_port=22,
+    )
+    views = registry.list_services_view(db_session)
+    assert len(views) == 1
+    assert views[0].name == "wb01-ssh"
+    assert views[0].device_name == "wb01"
+
+
+def test_list_grants_view_includes_device_names(db_session) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    consumer = _enroll(db_session, admin, "laptop")
+    service = registry.create_service(
+        db_session,
+        device_id=exposer.device.id,
+        name="wb01-ssh",
+        protocol=ServiceProtocol.SSH,
+        target_port=22,
+    )
+    registry.create_grant(db_session, service_id=service.id, consumer_device_id=consumer.device.id)
+
+    views = registry.list_grants_view(db_session)
+    assert len(views) == 1
+    assert views[0].service_name == "wb01-ssh"
+    assert views[0].exposer_device_name == "wb01"
+    assert views[0].consumer_device_name == "laptop"
 
 
 def test_list_devices_returns_all(db_session) -> None:

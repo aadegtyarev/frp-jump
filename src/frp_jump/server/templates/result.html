@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} &middot; frp-jump{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>{{ title }}</h1>
+  {% if error %}
+    <div class="notice">{{ error }}</div>
+  {% else %}
+    <p class="muted">{{ label }}</p>
+    <pre class="token mono">{{ value }}</pre>
+  {% endif %}
+  <p><a href="/">&larr; Back to dashboard</a></p>
+</section>
+{% endblock %}

@@ -57,6 +57,15 @@ def create_enroll_token(
 ) -> IssuedEnrollToken:
     if session.exec(select(Device).where(Device.name == device_name_hint)).first() is not None:
         raise ConflictError(f"device name {device_name_hint!r} already in use")
+    pending = session.exec(
+        select(EnrollToken).where(
+            EnrollToken.device_name_hint == device_name_hint,
+            EnrollToken.used_at.is_(None),
+            EnrollToken.expires_at >= _now(),
+        )
+    ).first()
+    if pending is not None:
+        raise ConflictError(f"an unredeemed enroll token for {device_name_hint!r} already exists")
     token = generate_token()
     expires_at = _now() + ttl
     record = EnrollToken(
@@ -178,6 +187,64 @@ def create_grant(session: Session, *, service_id: str, consumer_device_id: str) 
 
 def list_grants_for_service(session: Session, service_id: str) -> list[Grant]:
     return list(session.exec(select(Grant).where(Grant.service_id == service_id)))
+
+
+# --- dashboard views (for the WebUI) --------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceView:
+    id: str
+    name: str
+    protocol: ServiceProtocol
+    target_port: int
+    device_id: str
+    device_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class GrantView:
+    id: str
+    service_id: str
+    service_name: str
+    exposer_device_name: str
+    consumer_device_id: str
+    consumer_device_name: str
+
+
+def list_services_view(session: Session) -> list[ServiceView]:
+    rows = session.exec(select(Service, Device).join(Device, Service.device_id == Device.id)).all()
+    return [
+        ServiceView(
+            id=service.id,
+            name=service.name,
+            protocol=service.protocol,
+            target_port=service.target_port,
+            device_id=device.id,
+            device_name=device.name,
+        )
+        for service, device in rows
+    ]
+
+
+def list_grants_view(session: Session) -> list[GrantView]:
+    rows = session.exec(
+        select(Grant, Service, Device)
+        .join(Service, Grant.service_id == Service.id)
+        .join(Device, Service.device_id == Device.id)
+    ).all()
+    consumer_names = {d.id: d.name for d in session.exec(select(Device))}
+    return [
+        GrantView(
+            id=grant.id,
+            service_id=service.id,
+            service_name=service.name,
+            exposer_device_name=exposer_device.name,
+            consumer_device_id=grant.consumer_device_id,
+            consumer_device_name=consumer_names.get(grant.consumer_device_id, "?"),
+        )
+        for grant, service, exposer_device in rows
+    ]
 
 
 # --- desired-state views (what an agent should be doing) -----------------

@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 # Set FRP_JUMP_RELAY_PUBLIC_ADDR (required) and any other FRP_JUMP_* overrides here.
 EnvironmentFile=-/etc/frp-jump/server.env
-ExecStart=/usr/local/bin/frp-jump server run
+ExecStart=/usr/local/bin/frp-jump-server run
 Restart=on-failure
 RestartSec=5
 User=frp-jump

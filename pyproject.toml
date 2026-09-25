@@ -12,19 +12,27 @@ requires-python = ">=3.12"
 dependencies = [
     "typer>=0.15",
     "rich>=13.9",
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.32",
-    "jinja2>=3.1",
-    "python-multipart>=0.0.17",
-    "sqlmodel>=0.0.22",
     "cryptography>=43.0",
     "tomli-w>=1.1",
     "httpx>=0.27",
     "pydantic-settings>=2.15.0",
 ]
 
+[project.optional-dependencies]
+# Only the server/control-plane needs these -- a device install
+# (`pip install frp-jump`, no extra) stays lean. See `frp-jump-client`
+# below, whose import chain never touches this.
+server = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.17",
+    "sqlmodel>=0.0.22",
+]
+
 [project.scripts]
-frp-jump = "frp_jump.cli.main:app"
+frp-jump-client = "frp_jump.cli.client_cmds:app"
+frp-jump-server = "frp_jump.cli.server_cmds:app"
 
 [build-system]
 requires = ["uv_build>=0.11.14,<0.12.0"]

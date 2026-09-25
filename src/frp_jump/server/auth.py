@@ -15,7 +15,7 @@ from sqlmodel import Session as DbSession
 from sqlmodel import select
 
 from frp_jump.common.crypto import generate_token, hash_token
-from frp_jump.common.models import LoginToken, TokenPurpose, User
+from frp_jump.common.models import LoginToken, User
 from frp_jump.common.models import Session as SessionRow
 from frp_jump.server.registry import get_or_create_user
 
@@ -32,7 +32,6 @@ def issue_login_token(
     db: DbSession,
     *,
     email: str,
-    purpose: TokenPurpose,
     created_by: str | None,
     ttl: datetime.timedelta,
 ) -> str:
@@ -41,7 +40,6 @@ def issue_login_token(
     record = LoginToken(
         token_hash=hash_token(token),
         email=email,
-        purpose=purpose,
         created_by=created_by,
         expires_at=_now() + ttl,
     )
@@ -51,7 +49,7 @@ def issue_login_token(
 
 
 def redeem_login_token(db: DbSession, token: str) -> User:
-    """Verify + consume a login/invite link once; get-or-create its User."""
+    """Verify + consume a login link once; get-or-create its User."""
     record = db.exec(select(LoginToken).where(LoginToken.token_hash == hash_token(token))).first()
     if record is None:
         raise InvalidTokenError("unknown login link")

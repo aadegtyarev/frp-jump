@@ -20,8 +20,8 @@ uv run pytest tests/integration -m integration -q   # downloads real frp binarie
 uv run frp-jump --help
 ```
 
-There's no CI configured yet — run the two commands above locally before
-opening a PR.
+There's no CI running on pull requests yet (only on tag push, to build and
+publish a release) — run the two commands above locally before opening one.
 
 ## Conventions this codebase follows
 

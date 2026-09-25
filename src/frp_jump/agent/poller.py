@@ -8,11 +8,13 @@ import logging
 import socket
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 
 from frp_jump.agent import hosts
 from frp_jump.agent.state import AgentState, save
+from frp_jump.common.api import AGENT_API_PREFIX
 from frp_jump.driver.base import (
     ConsumedGrant,
     DesiredState,
@@ -23,9 +25,21 @@ from frp_jump.driver.base import (
 
 logger = logging.getLogger(__name__)
 
+# Control-plane requests are small metadata calls (never the tunneled
+# traffic itself, see common/models.py's module docstring), so one timeout
+# covers all of them; still overridable per call for e.g. a slower link.
+_HTTP_TIMEOUT_SECONDS = 15.0
+
 
 class SyncError(RuntimeError):
     pass
+
+
+class NotConnectedError(SyncError):
+    """`disconnect` targeted a connection the server has no record of --
+    the desired end state (not connected) is already reached, so this is
+    safe for a caller to treat as success (e.g. prune local state anyway)
+    rather than as a real failure, unlike other `SyncError`s."""
 
 
 def _is_bindable(port: int) -> bool:
@@ -55,10 +69,10 @@ def _auth_headers(state: AgentState) -> dict[str, str]:
     return {"Authorization": f"Bearer {state.api_token}"}
 
 
-def fetch_desired_state(state: AgentState, *, timeout: float = 15.0) -> dict:
+def fetch_desired_state(state: AgentState, *, timeout: float = _HTTP_TIMEOUT_SECONDS) -> dict:
     try:
         resp = httpx.get(
-            f"{state.control_url}/api/agent/desired-state",
+            f"{state.control_url}{AGENT_API_PREFIX}/desired-state",
             headers=_auth_headers(state),
             timeout=timeout,
         )
@@ -70,11 +84,11 @@ def fetch_desired_state(state: AgentState, *, timeout: float = 15.0) -> dict:
 
 
 def send_heartbeat(
-    state: AgentState, *, agent_version: str | None = None, timeout: float = 15.0
+    state: AgentState, *, agent_version: str | None = None, timeout: float = _HTTP_TIMEOUT_SECONDS
 ) -> None:
     try:
         resp = httpx.post(
-            f"{state.control_url}/api/agent/heartbeat",
+            f"{state.control_url}{AGENT_API_PREFIX}/heartbeat",
             json={"agent_version": agent_version},
             headers=_auth_headers(state),
             timeout=timeout,
@@ -83,6 +97,108 @@ def send_heartbeat(
         raise SyncError(f"could not reach {state.control_url}: {exc}") from exc
     if resp.status_code != 204:
         raise SyncError(f"heartbeat failed ({resp.status_code}): {resp.text}")
+
+
+def add_device(
+    state: AgentState,
+    *,
+    device_name_hint: str | None = None,
+    timeout: float = _HTTP_TIMEOUT_SECONDS,
+) -> dict:
+    """`client add-device`: mint an enroll token for one more device owned by
+    the same person as this one. Returns the server's JSON body (``token``,
+    ``device_name_hint``, ``expires_at``)."""
+    try:
+        resp = httpx.post(
+            f"{state.control_url}{AGENT_API_PREFIX}/devices/enroll-tokens",
+            json={"device_name_hint": device_name_hint},
+            headers=_auth_headers(state),
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        raise SyncError(f"could not reach {state.control_url}: {exc}") from exc
+    if resp.status_code != 200:
+        raise SyncError(f"add-device failed ({resp.status_code}): {resp.text}")
+    return resp.json()
+
+
+def list_devices(state: AgentState, *, timeout: float = _HTTP_TIMEOUT_SECONDS) -> list[dict]:
+    """`client list`: every device owned by the same person as this one."""
+    try:
+        resp = httpx.get(
+            f"{state.control_url}{AGENT_API_PREFIX}/devices",
+            headers=_auth_headers(state),
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        raise SyncError(f"could not reach {state.control_url}: {exc}") from exc
+    if resp.status_code != 200:
+        raise SyncError(f"list failed ({resp.status_code}): {resp.text}")
+    return resp.json()
+
+
+def delete_device(
+    state: AgentState, device_name: str, *, timeout: float = _HTTP_TIMEOUT_SECONDS
+) -> None:
+    """`client delete-device`: permanently remove one of your own devices."""
+    try:
+        resp = httpx.post(
+            f"{state.control_url}{AGENT_API_PREFIX}/devices/{quote(device_name, safe='')}/delete",
+            headers=_auth_headers(state),
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        raise SyncError(f"could not reach {state.control_url}: {exc}") from exc
+    if resp.status_code != 204:
+        raise SyncError(f"delete-device failed ({resp.status_code}): {resp.text}")
+
+
+def connect(
+    state: AgentState,
+    *,
+    device_name: str,
+    target_port: int,
+    protocol: ServiceProtocol,
+    timeout: float = _HTTP_TIMEOUT_SECONDS,
+) -> dict:
+    """`client connect`: wire this device up to consume a port on another
+    device you own. Returns the server's JSON body (``grant_id``,
+    ``exposer_device_name``, ``target_port``, ``protocol``)."""
+    try:
+        resp = httpx.post(
+            f"{state.control_url}{AGENT_API_PREFIX}/connect",
+            json={
+                "device_name": device_name,
+                "target_port": target_port,
+                "protocol": protocol.value,
+            },
+            headers=_auth_headers(state),
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        raise SyncError(f"could not reach {state.control_url}: {exc}") from exc
+    if resp.status_code != 200:
+        raise SyncError(f"connect failed ({resp.status_code}): {resp.text}")
+    return resp.json()
+
+
+def disconnect(
+    state: AgentState, *, device_name: str, target_port: int, timeout: float = _HTTP_TIMEOUT_SECONDS
+) -> None:
+    """`client disconnect`: drop a connection this device made with `connect`."""
+    try:
+        resp = httpx.post(
+            f"{state.control_url}{AGENT_API_PREFIX}/disconnect",
+            json={"device_name": device_name, "target_port": target_port},
+            headers=_auth_headers(state),
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        raise SyncError(f"could not reach {state.control_url}: {exc}") from exc
+    if resp.status_code == 404:
+        raise NotConnectedError(f"not connected: {resp.text}")
+    if resp.status_code != 204:
+        raise SyncError(f"disconnect failed ({resp.status_code}): {resp.text}")
 
 
 def build_desired_state(
@@ -152,11 +268,35 @@ def build_desired_state(
 def sync_ssh_config(
     state: AgentState, remote: dict, *, data_dir: Path, ssh_config_path: Path
 ) -> None:
-    ssh_entries = [
-        (g["service_name"], state.local_ports[g["grant_id"]])
-        for g in remote["consumed"]
-        if g["protocol"] == ServiceProtocol.SSH.value
-    ]
+    """SSH ``Host`` alias per consumed SSH grant: the local `connect` profile
+    name for it if one exists, else the exposing device's own name (the
+    common case -- one SSH connection per device). Service names are a
+    private server-side implementation detail (see
+    ``registry.find_or_create_service``) and never shown here."""
+    profile_by_target = {(p.device_name, p.target_port): name for name, p in state.profiles.items()}
+    ssh_entries: list[tuple[str, int]] = []
+    seen_aliases: set[str] = set()
+    for g in remote["consumed"]:
+        if g["protocol"] != ServiceProtocol.SSH.value:
+            continue
+        alias = profile_by_target.get(
+            (g["exposer_device_name"], g["target_port"]), g["exposer_device_name"]
+        )
+        if alias in seen_aliases:
+            # A `connect --as <name>` profile can collide with another
+            # grant's fallback (the exposing device's own name) -- ssh
+            # config is first-match-wins, so a silent second `Host <alias>`
+            # block would make `ssh <alias>` land on whichever grant this
+            # dict happened to list first, and could flip between polls.
+            # Keep only the first and say so, rather than guess.
+            logger.warning(
+                "ssh alias %r used by more than one connection -- keeping the "
+                "first, `disconnect` or `connect --as <other-name>` the rest",
+                alias,
+            )
+            continue
+        seen_aliases.add(alias)
+        ssh_entries.append((alias, state.local_ports[g["grant_id"]]))
     managed_path = hosts.write_ssh_config(data_dir, ssh_entries)
     hosts.ensure_include(ssh_config_path, managed_path)
 

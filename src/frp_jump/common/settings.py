@@ -72,7 +72,6 @@ class Settings(BaseSettings):
     # token / session lifetimes
     enroll_token_ttl_hours: int = 24
     login_token_ttl_minutes: int = 60
-    invite_token_ttl_days: int = 7
     session_ttl_days: int = 30
 
     # webui
@@ -80,7 +79,7 @@ class Settings(BaseSettings):
     webui_port: int = 8443
     tls_cert_file: Path | None = None
     tls_key_file: Path | None = None
-    # Used only to render clickable links (login/invite); e.g. "https://tunnel.example.com".
+    # Used only to render clickable links (the admin login link); e.g. "https://tunnel.example.com".
     public_base_url: str | None = None
 
     @classmethod

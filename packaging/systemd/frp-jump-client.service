@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=-/etc/frp-jump/client.env
-ExecStart=/usr/local/bin/frp-jump client run
+ExecStart=/usr/local/bin/frp-jump-client run
 Restart=on-failure
 RestartSec=5
 

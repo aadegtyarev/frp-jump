@@ -22,6 +22,17 @@ from pathlib import Path
 
 
 @dataclass(slots=True)
+class Profile:
+    """A locally-named shortcut for a `connect` target -- purely client-side
+    bookkeeping (this device's own memory of "what did I call that"), never
+    sent to or known by the server. The server only ever sees
+    (device_name, target_port); see ``registry.find_or_create_service``."""
+
+    device_name: str
+    target_port: int
+
+
+@dataclass(slots=True)
 class AgentState:
     device_id: str
     device_name: str
@@ -33,6 +44,7 @@ class AgentState:
     key_pem: str
     ca_cert_pem: str
     local_ports: dict[str, int] = field(default_factory=dict)
+    profiles: dict[str, Profile] = field(default_factory=dict)
 
 
 def state_path(data_dir: Path) -> Path:
@@ -45,6 +57,7 @@ def load(data_dir: Path) -> AgentState | None:
         return None
     data = json.loads(path.read_text())
     data["local_ports"] = {k: int(v) for k, v in data.get("local_ports", {}).items()}
+    data["profiles"] = {k: Profile(**v) for k, v in data.get("profiles", {}).items()}
     return AgentState(**data)
 
 

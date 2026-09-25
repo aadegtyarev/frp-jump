@@ -8,7 +8,6 @@ import typer
 import uvicorn
 from rich.console import Console
 
-from frp_jump.common.models import TokenPurpose
 from frp_jump.common.settings import Settings
 from frp_jump.driver.base import RelayState
 from frp_jump.driver.frp.binaries import ensure_installed
@@ -27,7 +26,17 @@ def init(
         ..., "--admin-email", help="Email identifying the admin account."
     ),
 ) -> None:
-    """Bootstrap this server: private CA, database, and an admin login link."""
+    """Bootstrap this server: private CA, database, and a one-time admin
+    login link for the WebUI.
+
+    Run this once, before the first `frp-jump server run`. Configure
+    FRP_JUMP_RELAY_PUBLIC_ADDR (or relay_public_addr in the config file)
+    first -- see the README for the full list of required settings.
+
+    Example:
+
+        frp-jump server init --admin-email you@example.com
+    """
     settings = Settings()
     try:
         result = bootstrap.initialize(settings, admin_email=admin_email)
@@ -45,28 +54,40 @@ def init(
 
 @app.command("login-link")
 def login_link(
-    email: str = typer.Argument(..., help="Email to mint a fresh login/invite link for."),
-    invite: bool = typer.Option(
-        False, "--invite", help="Mint a longer-lived invite link instead of a login link."
+    email: str = typer.Argument(
+        ..., help="Admin email to mint a fresh WebUI login link for.", metavar="EMAIL"
     ),
 ) -> None:
-    """Mint a fresh magic link (e.g. after the previous one expired)."""
+    """Mint a fresh admin WebUI login link (e.g. after the previous one expired).
+
+    The WebUI is admin-only -- regular users never log in to it at all. To
+    onboard a friend's first device, use the WebUI's "Add device" form with
+    their email as the owner; every device after that is theirs to add via
+    their own CLI (`frp-jump-client add-device`), no further action here.
+
+    Example:
+
+        frp-jump server login-link admin@example.com
+    """
     settings = Settings()
-    purpose = TokenPurpose.INVITE if invite else TokenPurpose.LOGIN
-    ttl = (
-        datetime.timedelta(days=settings.invite_token_ttl_days)
-        if invite
-        else datetime.timedelta(minutes=settings.login_token_ttl_minutes)
-    )
+    ttl = datetime.timedelta(minutes=settings.login_token_ttl_minutes)
     engine = make_engine(bootstrap.db_path(settings))
     with make_session(engine) as db:
-        token = auth.issue_login_token(db, email=email, purpose=purpose, created_by=None, ttl=ttl)
+        token = auth.issue_login_token(db, email=email, created_by=None, ttl=ttl)
     console.print(bootstrap.build_url(settings, f"/auth/{token}"))
 
 
 @app.command("run")
 def run() -> None:
-    """Run the relay (frps) and the control-plane API/WebUI. Foreground; for systemd."""
+    """Run the relay (frps) and the control-plane API/WebUI.
+
+    Foreground; meant to be wrapped by systemd (see packaging/systemd/).
+    Requires `frp-jump server init` to have run at least once.
+
+    Example:
+
+        frp-jump server run
+    """
     settings = Settings()
     try:
         ca = bootstrap.load_or_create_ca(settings)

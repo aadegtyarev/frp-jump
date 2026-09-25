@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from frp_jump.agent import poller
-from frp_jump.agent.state import AgentState, load
+from frp_jump.agent.state import AgentState, Profile, load
 
 _PORT_RANGE = range(40000, 40010)
 
@@ -261,17 +261,52 @@ def test_sync_ssh_config_only_includes_ssh_protocol_grants(tmp_path) -> None:
     state = _state(local_ports={"g1": 5000, "g2": 5001})
     remote = {
         "consumed": [
-            {"grant_id": "g1", "service_name": "wb01-ssh", "protocol": "ssh"},
-            {"grant_id": "g2", "service_name": "wb01-http", "protocol": "http"},
+            {
+                "grant_id": "g1",
+                "service_name": "svc-1-22",
+                "protocol": "ssh",
+                "exposer_device_name": "wb01",
+                "target_port": 22,
+            },
+            {
+                "grant_id": "g2",
+                "service_name": "svc-1-80",
+                "protocol": "http",
+                "exposer_device_name": "wb01",
+                "target_port": 80,
+            },
         ]
     }
     ssh_config_path = tmp_path / "ssh_config_real"
     poller.sync_ssh_config(state, remote, data_dir=tmp_path, ssh_config_path=ssh_config_path)
 
     managed_text = (tmp_path / "ssh_config").read_text()
-    assert "wb01-ssh" in managed_text
-    assert "wb01-http" not in managed_text
+    assert "Host wb01" in managed_text
+    assert "svc-1-80" not in managed_text
     assert "Include" in ssh_config_path.read_text()
+
+
+def test_sync_ssh_config_uses_the_local_profile_name_when_one_exists(tmp_path) -> None:
+    state = _state(
+        local_ports={"g1": 5000},
+        profiles={"my-wb01": Profile(device_name="wb01", target_port=22)},
+    )
+    remote = {
+        "consumed": [
+            {
+                "grant_id": "g1",
+                "service_name": "svc-1-22",
+                "protocol": "ssh",
+                "exposer_device_name": "wb01",
+                "target_port": 22,
+            }
+        ]
+    }
+    ssh_config_path = tmp_path / "ssh_config_real"
+    poller.sync_ssh_config(state, remote, data_dir=tmp_path, ssh_config_path=ssh_config_path)
+
+    managed_text = (tmp_path / "ssh_config").read_text()
+    assert "Host my-wb01" in managed_text
 
 
 def test_sync_once_runs_the_full_cycle(tmp_path, monkeypatch) -> None:
@@ -374,3 +409,203 @@ def test_run_forever_only_revalidates_ports_on_the_first_successful_cycle(
             port_range=_PORT_RANGE,
         )
     assert seen_revalidate == [True, False, False]
+
+
+def test_add_device_posts_and_returns_the_issued_token(monkeypatch) -> None:
+    state = _state()
+    captured = {}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured.update(url=url, json=json)
+        payload = {
+            "token": "tok",
+            "device_name_hint": "laptop",
+            "expires_at": "2030-01-01T00:00:00",
+        }
+        return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    result = poller.add_device(state, device_name_hint="laptop")
+
+    assert captured["url"] == "http://ctl.example.com/api/agent/devices/enroll-tokens"
+    assert captured["json"] == {"device_name_hint": "laptop"}
+    assert result["token"] == "tok"
+
+
+def test_add_device_raises_sync_error_on_failure(monkeypatch) -> None:
+    state = _state()
+
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(400, text="nope", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    with pytest.raises(poller.SyncError):
+        poller.add_device(state)
+
+
+def test_list_devices_returns_parsed_json(monkeypatch) -> None:
+    state = _state()
+    payload = [{"name": "wb01", "enrolled_at": "x", "last_seen_at": None, "revoked": False}]
+
+    def fake_get(url, *, headers, timeout):
+        assert url == "http://ctl.example.com/api/agent/devices"
+        return httpx.Response(200, json=payload, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(poller.httpx, "get", fake_get)
+    assert poller.list_devices(state) == payload
+
+
+def test_delete_device_posts_to_the_named_device(monkeypatch) -> None:
+    state = _state()
+    captured = {}
+
+    def fake_post(url, *, headers, timeout):
+        captured["url"] = url
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    poller.delete_device(state, "laptop")
+    assert captured["url"] == "http://ctl.example.com/api/agent/devices/laptop/delete"
+
+
+def test_delete_device_raises_sync_error_on_failure(monkeypatch) -> None:
+    state = _state()
+
+    def fake_post(url, *, headers, timeout):
+        return httpx.Response(404, text="nope", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    with pytest.raises(poller.SyncError):
+        poller.delete_device(state, "laptop")
+
+
+def test_connect_posts_device_port_and_protocol(monkeypatch) -> None:
+    from frp_jump.driver.base import ServiceProtocol
+
+    state = _state()
+    captured = {}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured.update(url=url, json=json)
+        return httpx.Response(
+            200,
+            json={
+                "grant_id": "g1",
+                "exposer_device_name": "wb01",
+                "target_port": 22,
+                "protocol": "ssh",
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    result = poller.connect(
+        state, device_name="wb01", target_port=22, protocol=ServiceProtocol.SSH
+    )
+
+    assert captured["url"] == "http://ctl.example.com/api/agent/connect"
+    assert captured["json"] == {"device_name": "wb01", "target_port": 22, "protocol": "ssh"}
+    assert result["grant_id"] == "g1"
+
+
+def test_connect_raises_sync_error_when_target_is_not_owned(monkeypatch) -> None:
+    from frp_jump.driver.base import ServiceProtocol
+
+    state = _state()
+
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(404, text="no such device", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    with pytest.raises(poller.SyncError):
+        poller.connect(state, device_name="wb01", target_port=22, protocol=ServiceProtocol.SSH)
+
+
+def test_disconnect_posts_device_and_port(monkeypatch) -> None:
+    state = _state()
+    captured = {}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured.update(url=url, json=json)
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    poller.disconnect(state, device_name="wb01", target_port=22)
+
+    assert captured["url"] == "http://ctl.example.com/api/agent/disconnect"
+    assert captured["json"] == {"device_name": "wb01", "target_port": 22}
+
+
+def test_disconnect_raises_sync_error_when_not_connected(monkeypatch) -> None:
+    state = _state()
+
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(404, text="not connected", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    with pytest.raises(poller.SyncError):
+        poller.disconnect(state, device_name="wb01", target_port=22)
+
+
+def test_sync_ssh_config_deduplicates_a_colliding_alias(tmp_path, caplog) -> None:
+    """A `connect --as <name>` profile that happens to match another
+    grant's fallback (the exposing device's own name) must not produce two
+    ambiguous `Host <name>` blocks."""
+    state = _state(
+        local_ports={"g1": 5000, "g2": 5001},
+        profiles={"wb01": Profile(device_name="wb02", target_port=22)},
+    )
+    remote = {
+        "consumed": [
+            {
+                "grant_id": "g1",
+                "service_name": "svc-1-22",
+                "protocol": "ssh",
+                "exposer_device_name": "wb01",
+                "target_port": 22,
+            },
+            {
+                "grant_id": "g2",
+                "service_name": "svc-2-22",
+                "protocol": "ssh",
+                "exposer_device_name": "wb02",
+                "target_port": 22,
+            },
+        ]
+    }
+    ssh_config_path = tmp_path / "ssh_config_real"
+    poller.sync_ssh_config(state, remote, data_dir=tmp_path, ssh_config_path=ssh_config_path)
+
+    managed_text = (tmp_path / "ssh_config").read_text()
+    assert managed_text.count("Host wb01") == 1
+    assert "Port 5000" in managed_text
+    assert "Port 5001" not in managed_text
+
+
+def test_delete_device_url_encodes_the_device_name(monkeypatch) -> None:
+    """device_name is arbitrary CLI input, not a server-validated name --
+    must not be interpolated into the URL path unescaped (path traversal /
+    query-string injection)."""
+    state = _state()
+    captured = {}
+
+    def fake_post(url, *, headers, timeout):
+        captured["url"] = url
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    poller.delete_device(state, "../../etc/passwd")
+
+    assert "../" not in captured["url"]
+    assert captured["url"].startswith("http://ctl.example.com/api/agent/devices/")
+
+
+def test_disconnect_raises_not_connected_error_on_404(monkeypatch) -> None:
+    state = _state()
+
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(404, text="not connected", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    with pytest.raises(poller.NotConnectedError):
+        poller.disconnect(state, device_name="wb01", target_port=22)

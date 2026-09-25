@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from frp_jump.agent.state import AgentState, load, save, state_path
+from frp_jump.agent.state import AgentState, Profile, load, save, state_path
 
 
 def _state(**overrides) -> AgentState:
@@ -30,6 +30,14 @@ def test_save_then_load_round_trips(tmp_path) -> None:
     save(tmp_path, state)
     loaded = load(tmp_path)
     assert loaded == state
+
+
+def test_save_then_load_round_trips_profiles(tmp_path) -> None:
+    state = _state(profiles={"wb01-ssh": Profile(device_name="wb01", target_port=22)})
+    save(tmp_path, state)
+    loaded = load(tmp_path)
+    assert loaded == state
+    assert loaded.profiles["wb01-ssh"].target_port == 22
 
 
 def test_save_writes_file_with_restricted_permissions(tmp_path) -> None:

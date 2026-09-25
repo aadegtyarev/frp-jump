@@ -484,3 +484,379 @@ def test_revoked_exposer_device_drops_out_of_consumer_view(db_session) -> None:
     registry.revoke_device(db_session, exposer.device.id)
 
     assert registry.consumed_grants_for_device(db_session, consumer.device.id) == []
+
+
+# --- nameless enroll tokens (name supplied at redeem time) --------------
+
+
+def test_create_enroll_token_without_name_defers_naming(db_session) -> None:
+    admin = _make_admin(db_session)
+    issued = registry.create_enroll_token(db_session, created_by=admin.id, ttl=_TTL)
+    assert issued.device_name_hint is None
+
+
+def test_redeem_nameless_token_requires_a_name(db_session) -> None:
+    admin = _make_admin(db_session)
+    issued = registry.create_enroll_token(db_session, created_by=admin.id, ttl=_TTL)
+    with pytest.raises(registry.ValidationError):
+        registry.redeem_enroll_token(db_session, issued.token, cert_serial="1")
+
+
+def test_redeem_nameless_token_with_requested_name(db_session) -> None:
+    admin = _make_admin(db_session)
+    issued = registry.create_enroll_token(db_session, created_by=admin.id, ttl=_TTL)
+    enrolled = registry.redeem_enroll_token(
+        db_session, issued.token, cert_serial="1", requested_name="wb01"
+    )
+    assert enrolled.device.name == "wb01"
+
+
+def test_redeem_nameless_token_validates_requested_name(db_session) -> None:
+    admin = _make_admin(db_session)
+    issued = registry.create_enroll_token(db_session, created_by=admin.id, ttl=_TTL)
+    with pytest.raises(registry.ValidationError):
+        registry.redeem_enroll_token(
+            db_session, issued.token, cert_serial="1", requested_name="bad name!"
+        )
+
+
+def test_redeem_fixed_name_token_ignores_requested_name(db_session) -> None:
+    admin = _make_admin(db_session)
+    issued = registry.create_enroll_token(
+        db_session, created_by=admin.id, ttl=_TTL, device_name_hint="wb01"
+    )
+    enrolled = registry.redeem_enroll_token(
+        db_session, issued.token, cert_serial="1", requested_name="ignored"
+    )
+    assert enrolled.device.name == "wb01"
+
+
+# --- enroll token revocation ----------------------------------------------
+
+
+def test_revoke_enroll_token_prevents_redemption(db_session) -> None:
+    admin = _make_admin(db_session)
+    issued = registry.create_enroll_token(
+        db_session, created_by=admin.id, ttl=_TTL, device_name_hint="wb01"
+    )
+    (pending,) = registry.list_pending_enroll_tokens(db_session)
+
+    registry.revoke_enroll_token(db_session, pending.id)
+
+    with pytest.raises(registry.NotFoundError):
+        registry.redeem_enroll_token(db_session, issued.token, cert_serial="1")
+    assert registry.list_pending_enroll_tokens(db_session) == []
+
+
+def test_revoke_enroll_token_rejects_unknown_id(db_session) -> None:
+    with pytest.raises(registry.NotFoundError):
+        registry.revoke_enroll_token(db_session, "no-such-token")
+
+
+def test_revoke_enroll_token_rejects_already_redeemed(db_session) -> None:
+    admin = _make_admin(db_session)
+    issued = registry.create_enroll_token(
+        db_session, created_by=admin.id, ttl=_TTL, device_name_hint="wb01"
+    )
+    (pending,) = registry.list_pending_enroll_tokens(db_session)
+    registry.redeem_enroll_token(db_session, issued.token, cert_serial="1")
+
+    with pytest.raises(registry.ConflictError):
+        registry.revoke_enroll_token(db_session, pending.id)
+
+
+def test_list_pending_enroll_tokens_shows_unredeemed_only(db_session) -> None:
+    admin = _make_admin(db_session)
+    registry.create_enroll_token(
+        db_session, created_by=admin.id, ttl=_TTL, device_name_hint="wb01"
+    )
+    issued2 = registry.create_enroll_token(
+        db_session, created_by=admin.id, ttl=_TTL, device_name_hint="laptop"
+    )
+    registry.redeem_enroll_token(db_session, issued2.token, cert_serial="1")
+
+    pending = registry.list_pending_enroll_tokens(db_session)
+    assert len(pending) == 1
+    assert pending[0].device_name_hint == "wb01"
+    assert pending[0].owner_email == "admin@example.com"
+
+
+# --- users view / delete ---------------------------------------------------
+
+
+def test_list_users_view_includes_device_counts(db_session) -> None:
+    admin = _make_admin(db_session)
+    _enroll(db_session, admin, "wb01")
+    _enroll(db_session, admin, "laptop")
+    views = {v.email: v for v in registry.list_users_view(db_session)}
+    assert views["admin@example.com"].device_count == 2
+    assert views["admin@example.com"].is_admin is True
+
+
+def test_delete_user_cascades_to_their_devices(db_session) -> None:
+    admin = _make_admin(db_session)
+    friend = registry.get_or_create_user(db_session, "friend@example.com")
+    issued = registry.create_enroll_token(
+        db_session, created_by=friend.id, ttl=_TTL, device_name_hint="phone"
+    )
+    enrolled = registry.redeem_enroll_token(db_session, issued.token, cert_serial="1")
+
+    registry.delete_user(db_session, friend.id)
+
+    assert registry.get_device(db_session, enrolled.device.id) is None
+    assert db_session.get(type(admin), friend.id) is None
+
+
+def test_delete_user_refuses_to_delete_the_only_admin(db_session) -> None:
+    admin = _make_admin(db_session)
+    with pytest.raises(registry.ConflictError):
+        registry.delete_user(db_session, admin.id)
+
+
+def test_delete_user_allows_deleting_one_of_several_admins(db_session) -> None:
+    admin = _make_admin(db_session)
+    second_admin = registry.get_or_create_user(db_session, "second@example.com", is_admin=True)
+    registry.delete_user(db_session, second_admin.id)
+    assert db_session.get(type(admin), second_admin.id) is None
+
+
+def test_delete_user_rejects_unknown_id(db_session) -> None:
+    with pytest.raises(registry.NotFoundError):
+        registry.delete_user(db_session, "no-such-user")
+
+
+# --- self-service device queries ------------------------------------------
+
+
+def test_list_devices_for_owner_scopes_correctly(db_session) -> None:
+    admin = _make_admin(db_session)
+    friend = registry.get_or_create_user(db_session, "friend@example.com")
+    _enroll(db_session, admin, "wb01")
+    issued = registry.create_enroll_token(
+        db_session, created_by=friend.id, ttl=_TTL, device_name_hint="phone"
+    )
+    registry.redeem_enroll_token(db_session, issued.token, cert_serial="1")
+
+    admin_devices = {d.name for d in registry.list_devices_for_owner(db_session, admin.id)}
+    friend_devices = {d.name for d in registry.list_devices_for_owner(db_session, friend.id)}
+    assert admin_devices == {"wb01"}
+    assert friend_devices == {"phone"}
+
+
+def test_get_device_by_name(db_session) -> None:
+    admin = _make_admin(db_session)
+    _enroll(db_session, admin, "wb01")
+    assert registry.get_device_by_name(db_session, "wb01").name == "wb01"
+    assert registry.get_device_by_name(db_session, "no-such") is None
+
+
+# --- find-or-create service/grant (client connect) -------------------------
+
+
+def test_find_or_create_service_creates_with_private_name(db_session) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    service = registry.find_or_create_service(
+        db_session, device_id=exposer.device.id, target_port=22, protocol=ServiceProtocol.SSH
+    )
+    assert service.name == f"svc-{exposer.device.id}-22"
+    assert service.target_port == 22
+
+
+def test_find_or_create_service_reuses_existing(db_session) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    first = registry.find_or_create_service(
+        db_session, device_id=exposer.device.id, target_port=22, protocol=ServiceProtocol.SSH
+    )
+    second = registry.find_or_create_service(
+        db_session, device_id=exposer.device.id, target_port=22, protocol=ServiceProtocol.SSH
+    )
+    assert first.id == second.id
+
+
+def test_find_or_create_grant_is_idempotent(db_session) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    consumer = _enroll(db_session, admin, "laptop")
+    service = registry.find_or_create_service(
+        db_session, device_id=exposer.device.id, target_port=22, protocol=ServiceProtocol.SSH
+    )
+    first = registry.find_or_create_grant(
+        db_session, service_id=service.id, consumer_device_id=consumer.device.id
+    )
+    second = registry.find_or_create_grant(
+        db_session, service_id=service.id, consumer_device_id=consumer.device.id
+    )
+    assert first.id == second.id
+    assert first.secret == second.secret
+
+
+def test_two_consumers_can_connect_to_the_same_service_independently(db_session) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    b = _enroll(db_session, admin, "b")
+    c = _enroll(db_session, admin, "c")
+    service = registry.find_or_create_service(
+        db_session, device_id=exposer.device.id, target_port=22, protocol=ServiceProtocol.SSH
+    )
+    grant_b = registry.find_or_create_grant(
+        db_session, service_id=service.id, consumer_device_id=b.device.id
+    )
+    grant_c = registry.find_or_create_grant(
+        db_session, service_id=service.id, consumer_device_id=c.device.id
+    )
+    assert grant_b.id != grant_c.id
+    assert grant_b.secret != grant_c.secret
+
+    registry.delete_grant(db_session, grant_c.id)
+    # b's grant is untouched by c's disconnect
+    assert len(registry.consumed_grants_for_device(db_session, b.device.id)) == 1
+    assert registry.consumed_grants_for_device(db_session, c.device.id) == []
+
+
+def test_find_grant_for_connection(db_session) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    consumer = _enroll(db_session, admin, "laptop")
+    service = registry.find_or_create_service(
+        db_session, device_id=exposer.device.id, target_port=22, protocol=ServiceProtocol.SSH
+    )
+    grant = registry.find_or_create_grant(
+        db_session, service_id=service.id, consumer_device_id=consumer.device.id
+    )
+    found = registry.find_grant_for_connection(
+        db_session,
+        device_id=exposer.device.id,
+        target_port=22,
+        consumer_device_id=consumer.device.id,
+    )
+    assert found.id == grant.id
+
+    missing = registry.find_grant_for_connection(
+        db_session,
+        device_id=exposer.device.id,
+        target_port=9999,
+        consumer_device_id=consumer.device.id,
+    )
+    assert missing is None
+
+
+def test_delete_grant_rejects_unknown_id(db_session) -> None:
+    with pytest.raises(registry.NotFoundError):
+        registry.delete_grant(db_session, "no-such-grant")
+
+
+# --- fixes from the post-self-service Opus review --------------------------
+
+
+def test_delete_user_also_removes_their_sessions_and_login_tokens(db_session) -> None:
+    """A user with a WebUI session or an issued login link must still be
+    deletable -- both tables FK to users.id, and PRAGMA foreign_keys=ON
+    means an incomplete cascade raises IntegrityError instead of a clean
+    delete."""
+    from sqlmodel import select as _select
+
+    from frp_jump.common.crypto import generate_token, hash_token
+    from frp_jump.common.models import LoginToken
+    from frp_jump.common.models import Session as SessionRow
+
+    admin = _make_admin(db_session)
+    second_admin = registry.get_or_create_user(db_session, "second@example.com", is_admin=True)
+    expires_at = registry._now() + _TTL
+
+    db_session.add(
+        SessionRow(
+            token_hash=hash_token(generate_token()), user_id=second_admin.id, expires_at=expires_at
+        )
+    )
+    db_session.add(
+        LoginToken(
+            token_hash=hash_token(generate_token()),
+            email=second_admin.email,
+            created_by=admin.id,
+            expires_at=expires_at,
+        )
+    )
+    db_session.commit()
+
+    registry.delete_user(db_session, second_admin.id)
+
+    assert db_session.get(type(admin), second_admin.id) is None
+    remaining = db_session.exec(
+        _select(SessionRow).where(SessionRow.user_id == second_admin.id)
+    ).all()
+    assert remaining == []
+
+
+def test_find_or_create_service_rejects_out_of_range_port(db_session) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    with pytest.raises(registry.ValidationError):
+        registry.find_or_create_service(
+            db_session, device_id=exposer.device.id, target_port=0, protocol=ServiceProtocol.SSH
+        )
+    with pytest.raises(registry.ValidationError):
+        registry.find_or_create_service(
+            db_session,
+            device_id=exposer.device.id,
+            target_port=70000,
+            protocol=ServiceProtocol.SSH,
+        )
+
+
+def test_find_or_create_service_rejects_a_protocol_mismatch_on_reuse(db_session) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    registry.find_or_create_service(
+        db_session, device_id=exposer.device.id, target_port=8080, protocol=ServiceProtocol.HTTP
+    )
+    with pytest.raises(registry.ConflictError):
+        registry.find_or_create_service(
+            db_session,
+            device_id=exposer.device.id,
+            target_port=8080,
+            protocol=ServiceProtocol.SSH,
+        )
+
+
+def test_find_or_create_service_converts_a_name_collision_to_conflict_error(db_session) -> None:
+    """An admin-authored service can collide with connect's synthetic
+    `svc-<device_id>-<port>` name -- must be a clean ConflictError, not a
+    raw IntegrityError from the services.name unique index."""
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    colliding_name = f"svc-{exposer.device.id}-22"
+    registry.create_service(
+        db_session,
+        device_id=exposer.device.id,
+        name=colliding_name,
+        protocol=ServiceProtocol.SSH,
+        target_port=9999,
+    )
+    with pytest.raises(registry.ConflictError):
+        registry.find_or_create_service(
+            db_session, device_id=exposer.device.id, target_port=22, protocol=ServiceProtocol.SSH
+        )
+
+
+def test_redeem_enroll_token_converts_a_name_race_to_conflict_error(db_session) -> None:
+    """Simulates the race where two redemptions for the same requested_name
+    both pass _check_name_free before either commits."""
+    admin = _make_admin(db_session)
+    issued = registry.create_enroll_token(db_session, created_by=admin.id, ttl=_TTL)
+    registry.redeem_enroll_token(db_session, issued.token, cert_serial="1", requested_name="wb01")
+
+    issued2 = registry.create_enroll_token(db_session, created_by=admin.id, ttl=_TTL)
+    # Bypass _check_name_free entirely to simulate the race window.
+    from frp_jump.server import registry as registry_module
+
+    original_check = registry_module._check_name_free
+    registry_module._check_name_free = lambda *a, **k: None
+    try:
+        with pytest.raises(registry.ConflictError):
+            registry.redeem_enroll_token(
+                db_session, issued2.token, cert_serial="2", requested_name="wb01"
+            )
+    finally:
+        registry_module._check_name_free = original_check

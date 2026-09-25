@@ -3,7 +3,6 @@ import datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from frp_jump.common.models import TokenPurpose
 from frp_jump.common.pki import CertificateAuthority
 from frp_jump.common.settings import Settings
 from frp_jump.driver.base import ServiceProtocol
@@ -42,9 +41,7 @@ def client(app_ctx):
 
 def _admin_login_link(engine) -> str:
     with make_session(engine) as db:
-        return auth.issue_login_token(
-            db, email="admin@example.com", purpose=TokenPurpose.LOGIN, created_by=None, ttl=_TTL
-        )
+        return auth.issue_login_token(db, email="admin@example.com", created_by=None, ttl=_TTL)
 
 
 def test_dashboard_redirects_to_login_when_unauthenticated(client) -> None:
@@ -89,9 +86,7 @@ def test_session_cookie_is_not_secure_when_neither_scheme_nor_public_url_is_http
     plain_client = TestClient(app, follow_redirects=False)
 
     with make_session(engine) as db:
-        token = auth.issue_login_token(
-            db, email="admin@example.com", purpose=TokenPurpose.LOGIN, created_by=None, ttl=_TTL
-        )
+        token = auth.issue_login_token(db, email="admin@example.com", created_by=None, ttl=_TTL)
     resp = plain_client.get(f"/auth/{token}")
     set_cookie = resp.headers.get("set-cookie", "")
     assert "Secure" not in set_cookie
@@ -128,11 +123,36 @@ def test_create_enroll_token_shows_command_once(client, app_ctx) -> None:
     client.get(f"/auth/{_admin_login_link(engine)}")
     resp = client.post("/devices/enroll-token", data={"device_name": "wb01"})
     assert resp.status_code == 200
-    assert "frp-jump client enroll" in resp.text
+    assert "frp-jump-client enroll" in resp.text
     assert "wb01" in resp.text
 
     with make_session(engine) as db:
         assert registry.list_devices(db) == []  # not enrolled yet, just a token was minted
+
+
+def test_create_enroll_token_without_a_name_defers_naming_to_the_client(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    client.get(f"/auth/{_admin_login_link(engine)}")
+    resp = client.post("/devices/enroll-token", data={})
+    assert resp.status_code == 200
+    assert "--name" in resp.text
+
+
+def test_create_enroll_token_for_a_friends_email_makes_them_the_owner(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    client.get(f"/auth/{_admin_login_link(engine)}")
+    resp = client.post(
+        "/devices/enroll-token",
+        data={"device_name": "phone", "owner_email": "friend@example.com"},
+    )
+    assert resp.status_code == 200
+    assert "friend@example.com" in resp.text
+
+    with make_session(engine) as db:
+        friend = registry.get_or_create_user(db, "friend@example.com")
+        issued_tokens = registry.list_pending_enroll_tokens(db)
+    assert len(issued_tokens) == 1
+    assert issued_tokens[0].owner_email == friend.email
 
 
 def test_duplicate_device_name_shows_error(client, app_ctx) -> None:
@@ -188,81 +208,6 @@ def test_add_service_and_grant_end_to_end(client, app_ctx) -> None:
     assert "laptop" in dashboard.text
 
 
-def test_admin_can_invite(client, app_ctx) -> None:
-    _app, engine, _ca = app_ctx
-    client.get(f"/auth/{_admin_login_link(engine)}")
-    resp = client.post("/users/invite", data={"email": "friend@example.com"})
-    assert resp.status_code == 200
-    assert "https://tunnel.example.com/auth/" in resp.text
-
-
-def _non_admin_client(client, engine) -> TestClient:
-    """First user (already logged in via `client`) becomes admin; this logs in
-    a second, non-admin user via an invite token, on a separate client/session."""
-    client.get(f"/auth/{_admin_login_link(engine)}")
-    with make_session(engine) as db:
-        invite_token = auth.issue_login_token(
-            db,
-            email="friend@example.com",
-            purpose=TokenPurpose.INVITE,
-            created_by=None,
-            ttl=_TTL,
-        )
-    friend_client = TestClient(client.app, base_url="https://testserver", follow_redirects=False)
-    friend_client.get(f"/auth/{invite_token}")
-    return friend_client
-
-
-def test_non_admin_cannot_invite(client, app_ctx) -> None:
-    _app, engine, _ca = app_ctx
-    friend_client = _non_admin_client(client, engine)
-    resp = friend_client.post("/users/invite", data={"email": "third@example.com"})
-    assert resp.status_code == 403
-    assert "only an admin" in resp.text
-
-
-def test_non_admin_cannot_create_enroll_token(client, app_ctx) -> None:
-    _app, engine, _ca = app_ctx
-    friend_client = _non_admin_client(client, engine)
-    resp = friend_client.post("/devices/enroll-token", data={"device_name": "sneaky"})
-    assert resp.status_code == 403
-    with make_session(engine) as db:
-        assert registry.list_devices(db) == []
-
-
-def test_non_admin_cannot_create_service_or_grant_on_someone_elses_device(
-    client, app_ctx
-) -> None:
-    _app, engine, _ca = app_ctx
-    # admin enrolls their own device
-    client.get(f"/auth/{_admin_login_link(engine)}")
-    with make_session(engine) as db:
-        admin = registry.get_or_create_user(db, "admin@example.com")
-    exposer_id = _enroll_device(engine, admin.id, "wb01")
-
-    friend_client = _non_admin_client(client, engine)
-
-    resp = friend_client.post(
-        "/services",
-        data={"device_id": exposer_id, "name": "wb01-ssh", "protocol": "ssh", "target_port": "22"},
-    )
-    assert resp.status_code == 403
-    with make_session(engine) as db:
-        assert registry.list_services_view(db) == []
-
-    # even a service the admin already created can't be granted by a non-admin
-    with make_session(engine) as db:
-        service = registry.create_service(
-            db, device_id=exposer_id, name="wb01-ssh", protocol=ServiceProtocol.SSH, target_port=22
-        )
-    resp = friend_client.post(
-        "/grants", data={"service_id": service.id, "consumer_device_id": exposer_id}
-    )
-    assert resp.status_code == 403
-    with make_session(engine) as db:
-        assert registry.list_grants_view(db) == []
-
-
 def test_admin_can_revoke_a_device(client, app_ctx) -> None:
     _app, engine, _ca = app_ctx
     client.get(f"/auth/{_admin_login_link(engine)}")
@@ -276,19 +221,6 @@ def test_admin_can_revoke_a_device(client, app_ctx) -> None:
     with make_session(engine) as db:
         device = registry.get_device(db, device_id)
         assert device.revoked_at is not None
-
-
-def test_non_admin_cannot_revoke_a_device(client, app_ctx) -> None:
-    _app, engine, _ca = app_ctx
-    with make_session(engine) as db:
-        admin = registry.get_or_create_user(db, "admin@example.com")
-    device_id = _enroll_device(engine, admin.id, "wb01")
-    friend_client = _non_admin_client(client, engine)
-
-    resp = friend_client.post(f"/devices/{device_id}/revoke")
-    assert resp.status_code == 403
-    with make_session(engine) as db:
-        assert registry.get_device(db, device_id).revoked_at is None
 
 
 def test_admin_can_delete_a_device_and_reenroll_the_name(client, app_ctx) -> None:
@@ -309,17 +241,30 @@ def test_admin_can_delete_a_device_and_reenroll_the_name(client, app_ctx) -> Non
     assert "already" not in resp.text
 
 
-def test_non_admin_cannot_delete_a_device(client, app_ctx) -> None:
+def test_non_admin_session_cannot_reach_the_dashboard_or_mutate_anything(client, app_ctx) -> None:
+    """A second user (e.g. one created as the owner of a friend's enroll
+    token) never gets a WebUI session of their own -- but simulate one to
+    confirm require_admin still blocks it as defense in depth."""
     _app, engine, _ca = app_ctx
     with make_session(engine) as db:
         admin = registry.get_or_create_user(db, "admin@example.com")
-    device_id = _enroll_device(engine, admin.id, "wb01")
-    friend_client = _non_admin_client(client, engine)
-
-    resp = friend_client.post(f"/devices/{device_id}/delete")
-    assert resp.status_code == 403
+        admin_id = admin.id
+        registry.get_or_create_user(db, "friend@example.com")
+    device_id = _enroll_device(engine, admin_id, "wb01")
     with make_session(engine) as db:
-        assert registry.get_device(db, device_id) is not None
+        friend = registry.get_or_create_user(db, "friend@example.com")
+        session_token = auth.create_session(db, friend, ttl=_TTL)
+    friend_client = TestClient(client.app, base_url="https://testserver", follow_redirects=False)
+    friend_client.cookies.set(SESSION_COOKIE, session_token)
+
+    assert friend_client.get("/").status_code == 403
+    sneaky = friend_client.post("/devices/enroll-token", data={"device_name": "sneaky"})
+    assert sneaky.status_code == 403
+    assert friend_client.post(f"/devices/{device_id}/revoke").status_code == 403
+    assert friend_client.post(f"/devices/{device_id}/delete").status_code == 403
+    with make_session(engine) as db:
+        assert registry.list_devices(db) == [registry.get_device(db, device_id)]
+        assert registry.get_device(db, device_id).revoked_at is None
 
 
 def test_admin_can_revoke_a_grant(client, app_ctx) -> None:
@@ -360,3 +305,68 @@ def test_revoked_device_is_rejected_by_the_agent_api(client, app_ctx) -> None:
         headers={"Authorization": f"Bearer {enrolled.api_token}"},
     )
     assert api_resp.status_code == 401
+
+
+def test_dashboard_shows_device_owner_and_users_table(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    client.get(f"/auth/{_admin_login_link(engine)}")
+    with make_session(engine) as db:
+        admin = registry.get_or_create_user(db, "admin@example.com")
+        admin_id = admin.id
+        friend = registry.get_or_create_user(db, "friend@example.com")
+        issued = registry.create_enroll_token(
+            db, device_name_hint="phone", created_by=friend.id, ttl=_TTL
+        )
+        registry.redeem_enroll_token(db, issued.token, cert_serial="1")
+    _enroll_device(engine, admin_id, "wb01")
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "phone" in resp.text
+    assert "friend@example.com" in resp.text
+    assert "admin@example.com" in resp.text
+
+
+def test_admin_can_delete_a_user_and_their_devices(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    client.get(f"/auth/{_admin_login_link(engine)}")
+    with make_session(engine) as db:
+        friend = registry.get_or_create_user(db, "friend@example.com")
+        friend_id = friend.id
+        issued = registry.create_enroll_token(
+            db, device_name_hint="phone", created_by=friend.id, ttl=_TTL
+        )
+        enrolled = registry.redeem_enroll_token(db, issued.token, cert_serial="1")
+        device_id = enrolled.device.id
+
+    resp = client.post(f"/users/{friend_id}/delete")
+    assert resp.status_code == 303
+
+    with make_session(engine) as db:
+        assert registry.get_device(db, device_id) is None
+
+
+def test_admin_cannot_delete_themself_as_the_only_admin(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    client.get(f"/auth/{_admin_login_link(engine)}")
+    with make_session(engine) as db:
+        admin = registry.get_or_create_user(db, "admin@example.com")
+
+    resp = client.post(f"/users/{admin.id}/delete")
+    assert resp.status_code == 200
+    assert "only remaining admin" in resp.text
+
+
+def test_admin_can_revoke_a_pending_enroll_token(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    client.get(f"/auth/{_admin_login_link(engine)}")
+    client.post("/devices/enroll-token", data={"device_name": "wb01"})
+
+    with make_session(engine) as db:
+        (pending,) = registry.list_pending_enroll_tokens(db)
+
+    resp = client.post(f"/enroll-tokens/{pending.id}/revoke")
+    assert resp.status_code == 303
+
+    with make_session(engine) as db:
+        assert registry.list_pending_enroll_tokens(db) == []

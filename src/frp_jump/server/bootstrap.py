@@ -10,7 +10,6 @@ import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
-from frp_jump.common.models import TokenPurpose
 from frp_jump.common.pki import CertificateAuthority, KeyCertPair, write_private_key
 from frp_jump.common.settings import Settings
 from frp_jump.server import auth
@@ -95,7 +94,6 @@ def initialize(settings: Settings, *, admin_email: str) -> BootstrapResult:
         login_token = auth.issue_login_token(
             db,
             email=admin_email,
-            purpose=TokenPurpose.LOGIN,
             created_by=None,
             ttl=datetime.timedelta(minutes=settings.login_token_ttl_minutes),
         )

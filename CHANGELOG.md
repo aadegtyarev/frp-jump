@@ -6,6 +6,93 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+### Added
+
+- Self-service device/connection management from the CLI, no admin action
+  needed beyond a friend's very first device:
+  `client add-device` (chain-enroll one more of your own devices),
+  `client list` (devices you own), `client delete-device`,
+  `client connect`/`client disconnect` (wire yourself up to a port on
+  another of your own devices, under a locally-named "profile" — purely
+  client-side, never sent to the server)
+- Enroll tokens can now defer naming to whoever redeems them
+  (`client enroll ... --name`), instead of always fixing the device name
+  up front at issue time
+- Packaging split: `frp-jump-client` and `frp-jump-server` are now
+  separate console-script entry points sharing one package, with the
+  heavy server-only dependencies (fastapi, uvicorn, sqlmodel, jinja2,
+  python-multipart) moved to an optional `[server]` extra — a device-only
+  install (`pip install frp-jump`) no longer pulls them in
+- Every CLI command now has full `--help` text with runnable examples
+
+### Removed
+
+- The combined `frp-jump server ...` / `frp-jump client ...` console
+  script (`cli/main.py`) — superseded by the dedicated `frp-jump-server`
+  and `frp-jump-client` entry points above, and keeping a third,
+  role-agnostic one around (that also had to special-case hiding
+  `server ...` on a device-only install) was no longer buying anything.
+  If you were using it, switch to `frp-jump-server ...` / `frp-jump-client
+  ...` directly
+
+### Changed
+
+- The WebUI is now strictly admin-only — the old non-admin "invited user"
+  login/dashboard-viewing path is gone, along with `TokenPurpose.INVITE`
+  and the email-based invite flow. Onboarding a friend now means the admin
+  issues their first enroll token (optionally naming them as its owner via
+  the "Add device" form's owner-email field); everything after that is
+  self-service via their own CLI
+- Server-side `Service` names are now a private, auto-generated
+  implementation detail (`svc-<device-id>-<port>`), never shown to or
+  typed by a user — the local "profile" name (or the device's own name, by
+  default) is what shows up as the `ssh <name>` host alias instead
+- Admin dashboard gained Users (with device counts, delete) and Pending
+  enroll tokens (with revoke) sections, and an owner + online/offline
+  column on the Devices table
+
+### Security
+
+An independent Opus review of the self-service surface above (see
+`docs/architecture.md`) found and fixed:
+
+- `delete_user` didn't clean up the target's `Session`/`LoginToken` rows,
+  so deleting anyone who had ever logged in or been sent a login link
+  raised a raw `IntegrityError` (HTTP 500) instead of succeeding, and a
+  leftover unredeemed login link could silently recreate the "deleted"
+  account
+- `/api/agent/enroll` handed an unvalidated, potentially attacker-supplied
+  `requested_name` straight to the CA before validating it, letting a
+  malformed name reach a cert-signing operation (and crash it) instead of
+  getting a clean 400
+- `/api/agent/connect` didn't range-check `target_port`, letting a device
+  push a nonsense port (0, negative, >65535) into another owned device's
+  frpc config, breaking every tunnel on that device
+- `/api/agent/devices/enroll-tokens` echoed registry's real conflict
+  reason, letting one owner enumerate another owner's device names — now a
+  generic message regardless of cause
+- `find_or_create_service` silently ignored a protocol mismatch on reuse,
+  so `connect`'s response could claim a protocol the server would not
+  actually use, with no error and no working connection
+- `/api/agent/connect` allowed connecting to an already-revoked device or
+  to the calling device itself, producing grants that look successful but
+  never actually work
+- `find_or_create_service`/`redeem_enroll_token` could hit a raw
+  `IntegrityError` on a service/device-name collision (self-service vs.
+  admin-authored, or a concurrent-enroll race) instead of a clean
+  `ConflictError`
+- `poller.delete_device` interpolated the device name into a URL path
+  unescaped
+- `sync_ssh_config` could emit two `Host <alias>` blocks for the same
+  alias (a `connect --as` name colliding with another grant's device-name
+  fallback), making `ssh <alias>` land on an unpredictable target
+- `client disconnect` left a local profile stuck forever if the
+  server-side connection was already gone (grant revoked, device
+  deleted) — it's pruned locally either way now
+- `agent_version`'s CLI default was a literal `"0.1.0"` that had already
+  drifted from the actual package version; now read from the installed
+  package's own metadata
+
 ## [0.1.1] - 2026-09-25
 
 ### Added

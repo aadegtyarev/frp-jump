@@ -28,7 +28,6 @@ docs/architecture.md.
 from __future__ import annotations
 
 import datetime
-from enum import StrEnum
 
 from sqlmodel import Field, SQLModel
 
@@ -42,18 +41,12 @@ __all__ = [
     "LoginToken",
     "Service",
     "Session",
-    "TokenPurpose",
     "User",
 ]
 
 
 def _now() -> datetime.datetime:
     return datetime.datetime.now(datetime.UTC)
-
-
-class TokenPurpose(StrEnum):
-    LOGIN = "login"
-    INVITE = "invite"
 
 
 class User(SQLModel, table=True):
@@ -77,12 +70,15 @@ class Session(SQLModel, table=True):
 
 
 class LoginToken(SQLModel, table=True):
+    """WebUI login link -- admin-only (see module docstring). The first
+    user ever redeemed becomes admin (``auth.redeem_login_token``); every
+    other account is created via an ``EnrollToken`` instead, never this."""
+
     __tablename__ = "login_tokens"
 
     id: str = Field(default_factory=generate_id, primary_key=True)
     token_hash: str = Field(index=True, unique=True)
     email: str
-    purpose: TokenPurpose
     created_by: str | None = Field(default=None, foreign_key="users.id")
     created_at: datetime.datetime = Field(default_factory=_now)
     expires_at: datetime.datetime
@@ -109,11 +105,16 @@ class EnrollToken(SQLModel, table=True):
 
     id: str = Field(default_factory=generate_id, primary_key=True)
     token_hash: str = Field(index=True, unique=True)
-    device_name_hint: str
+    # None means the issuer didn't fix a name -- whoever redeems it supplies
+    # one at `client enroll --name` time instead (the self-service
+    # `add-device <name>` path always fixes it up front, since the caller
+    # already knows the name; the admin-issued "for a friend" path may not).
+    device_name_hint: str | None = None
     created_by: str = Field(foreign_key="users.id")
     created_at: datetime.datetime = Field(default_factory=_now)
     expires_at: datetime.datetime
     used_at: datetime.datetime | None = None
+    revoked_at: datetime.datetime | None = None
 
 
 class Service(SQLModel, table=True):

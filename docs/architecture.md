@@ -108,6 +108,67 @@ Hard revocation (an already-compromised device that must be cut off
 *immediately*) still means rotating the CA. See the module docstring in
 `common/models.py`.
 
+## Self-service redesign
+
+The original design had an admin manually create every `Service` (with a
+human-chosen name) and `Grant` in the WebUI, and let a non-admin "invited"
+user log in to view (but not change) the dashboard. That's gone, replaced
+by:
+
+- **The WebUI is admin-only.** There is no non-admin login path at all
+  (`TokenPurpose`/the invite flow were removed outright, not just hidden).
+  Onboarding someone new means the admin issues their first `EnrollToken`
+  with that person's email as its `created_by` (the WebUI's "Add device"
+  form's owner-email field, defaulting to the admin's own account) --
+  every device after that one is self-service.
+- **`Service` names are now private and synthetic**
+  (`svc-<device_id>-<port>`, `registry.find_or_create_service`), because
+  they're no longer human-authored -- `client connect` creates them on
+  demand from just (device, port). Two different owners' `connect` calls
+  can never collide with each other this way (the device id is part of
+  the name), but the `services.name` column is still one global unique
+  index shared with admin-authored names from the WebUI's "Add service"
+  form -- an admin who manually names a service `svc-<some-other-device-
+  id>-<port>` can still collide with a future `connect` call, or a
+  concurrent `connect`/re-enroll race can still hit the same unique index.
+  Both are handled as a clean `ConflictError` (not a raw `IntegrityError`),
+  not prevented up front.
+- **Local "profiles" replace service names as the human-facing label.**
+  A profile (`agent/state.py`'s `Profile`, keyed by a name in
+  `AgentState.profiles`) is pure client-side state -- `{device_name,
+  target_port}` -- created by `client connect --as <name>` (default: the
+  target device's own name) and never sent to or known by the server. Two
+  different devices can use different profile names for the exact same
+  server-side grant; the server doesn't care. `agent/poller.py`'s
+  `sync_ssh_config` resolves the `ssh <alias>` Host block from a matching
+  profile when one exists, falling back to the exposing device's name
+  otherwise (e.g. a grant that was set up before self-service, or via the
+  admin WebUI directly).
+- **Self-service device/connection endpoints** (`server/api.py`,
+  `/api/agent/devices*`, `/api/agent/connect`, `/api/agent/disconnect`)
+  are all scoped to the calling device's `owner_user_id` --
+  `api._get_owned_device_by_name` returns 404 (not 403) for a device you
+  don't own, so as not to leak whether a name belongs to someone else.
+- **Accepted, not enforced**: nothing rate-limits how many `EnrollToken`s
+  a device can mint via `add-device`, or how many `Service`/`Grant` rows
+  it can create via `connect` (up to 65535 ports x however many devices
+  you own). Given the threat model (an already-authenticated device
+  spending only its own owner's rows in your own SQLite database, not a
+  stranger's), this is accepted as-is rather than adding a limit that
+  would only matter to an already-trusted party being unusually hostile.
+
+## Packaging split
+
+`frp-jump-client` and `frp-jump-server` are separate `[project.scripts]`
+entry points in one package (`pyproject.toml`), with fastapi/uvicorn/
+sqlmodel/jinja2/python-multipart moved to an optional `[server]` extra --
+a device-only `pip install frp-jump` never imports them. There used to
+also be a combined `frp-jump server/client ...` entry point
+(`cli/main.py`); it was removed once the two dedicated commands existed,
+since a role-agnostic third entry point that also had to conditionally
+hide `server ...` on a device-only install was needless complexity once
+nothing depended on it.
+
 ## Security hardening pass
 
 An independent Opus review (see git history around this section) found

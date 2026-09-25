@@ -25,7 +25,7 @@ def test_enroll_success_saves_state(tmp_path, monkeypatch) -> None:
 
     def fake_post(url, *, json, timeout):
         assert url == "https://ctl.example.com/api/agent/enroll"
-        assert json == {"token": "tok123"}
+        assert json == {"token": "tok123", "requested_name": None}
         return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
 
     monkeypatch.setattr(enroll.httpx, "post", fake_post)
@@ -42,6 +42,22 @@ def test_enroll_success_saves_state(tmp_path, monkeypatch) -> None:
 
     reloaded = load(tmp_path)
     assert reloaded == state
+
+
+def test_enroll_passes_requested_name_through(tmp_path, monkeypatch) -> None:
+    payload = _payload()
+
+    def fake_post(url, *, json, timeout):
+        assert json == {"token": "tok123", "requested_name": "wb01"}
+        return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(enroll.httpx, "post", fake_post)
+    enroll.enroll(
+        control_url="https://ctl.example.com",
+        token="tok123",
+        data_dir=tmp_path,
+        requested_name="wb01",
+    )
 
 
 def test_enroll_raises_on_non_200(monkeypatch, tmp_path) -> None:

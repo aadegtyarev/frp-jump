@@ -1,9 +1,13 @@
 #!/bin/bash
-# Mint a fresh frp-jump login/invite link without hand-assembling the
+# Mint a fresh frp-jump admin WebUI login link without hand-assembling the
 # `env $(sudo cat /etc/frp-jump/server.env | xargs) ...` incantation every
-# time -- `frp-jump server login-link` needs the same FRP_JUMP_* env vars
-# as `server run`, but running it directly doesn't go through systemd's
+# time -- `frp-jump-server login-link` needs the same FRP_JUMP_* env vars
+# as `run`, but running it directly doesn't go through systemd's
 # EnvironmentFile, so it doesn't pick them up on its own.
+#
+# The WebUI is admin-only -- this is only ever for the admin themselves.
+# Onboarding someone else is a WebUI "Add device" action instead (see
+# README), not a login link.
 #
 # Assumes the systemd deployment layout from the README (data/venv under
 # /opt/frp-jump, config at /etc/frp-jump/server.env, service user
@@ -12,12 +16,11 @@
 # Install: copy to /usr/local/bin/frp-jump-login-link, chmod 755, root:root.
 #
 # Usage:
-#   frp-jump-login-link you@example.com             # login link (short TTL)
-#   frp-jump-login-link friend@example.com --invite  # invite link (longer TTL)
+#   frp-jump-login-link you@example.com
 set -euo pipefail
 if [ -z "${1:-}" ]; then
-    echo "usage: frp-jump-login-link <email> [--invite]" >&2
+    echo "usage: frp-jump-login-link <email>" >&2
     exit 1
 fi
 sudo -u frp-jump env $(sudo cat /etc/frp-jump/server.env | xargs) \
-    /opt/frp-jump/.venv/bin/frp-jump server login-link "$@"
+    /opt/frp-jump/.venv/bin/frp-jump-server login-link "$@"

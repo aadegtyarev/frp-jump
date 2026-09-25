@@ -9,16 +9,29 @@ from pathlib import Path
 import httpx
 
 from frp_jump.agent.state import AgentState, save
+from frp_jump.common.api import AGENT_API_PREFIX
+
+# Longer than agent/poller.py's routine per-request timeout: enroll also
+# does a CA-signing round trip server-side, and it's a one-off interactive
+# command, not a background poll -- worth waiting a bit longer for.
+_ENROLL_TIMEOUT_SECONDS = 30.0
 
 
 class EnrollError(RuntimeError):
     pass
 
 
-def enroll(*, control_url: str, token: str, data_dir: Path) -> AgentState:
+def enroll(
+    *, control_url: str, token: str, data_dir: Path, requested_name: str | None = None
+) -> AgentState:
     control_url = control_url.rstrip("/")
+    request_body = {"token": token, "requested_name": requested_name}
     try:
-        resp = httpx.post(f"{control_url}/api/agent/enroll", json={"token": token}, timeout=30.0)
+        resp = httpx.post(
+            f"{control_url}{AGENT_API_PREFIX}/enroll",
+            json=request_body,
+            timeout=_ENROLL_TIMEOUT_SECONDS,
+        )
     except httpx.HTTPError as exc:
         raise EnrollError(f"could not reach {control_url}: {exc}") from exc
     if resp.status_code != 200:

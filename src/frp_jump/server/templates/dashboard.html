@@ -8,21 +8,22 @@
   <h2>Devices</h2>
   {% if devices %}
   <table>
-    <thead><tr><th>Name</th><th>Status</th><th>Enrolled</th><th>Last seen</th><th>Agent</th>{% if user.is_admin %}<th></th>{% endif %}</tr></thead>
+    <thead><tr><th>Name</th><th>Owner</th><th>Status</th><th>Enrolled</th><th>Last seen</th><th>Agent</th><th></th></tr></thead>
     <tbody>
       {% for d in devices %}
       <tr>
         <td class="mono">{{ d.name }}</td>
+        <td class="muted">{{ d.owner_email }}</td>
         <td>
-          {% if d.revoked_at %}<span class="pill revoked">revoked</span>
-          {% else %}<span class="pill active">active</span>{% endif %}
+          {% if d.revoked %}<span class="pill revoked">revoked</span>
+          {% elif online[d.id] %}<span class="pill active">online</span>
+          {% else %}<span class="pill">offline</span>{% endif %}
         </td>
         <td class="muted">{{ d.enrolled_at.strftime("%Y-%m-%d") }}</td>
         <td class="muted">{{ d.last_seen_at.strftime("%Y-%m-%d %H:%M") if d.last_seen_at else "never" }}</td>
         <td class="muted">{{ d.agent_version or "—" }}</td>
-        {% if user.is_admin %}
         <td style="white-space:nowrap">
-          {% if not d.revoked_at %}
+          {% if not d.revoked %}
           <form action="/devices/{{ d.id }}/revoke" method="post" style="margin:0; display:inline">
             <button type="submit" class="danger small">Revoke</button>
           </form>
@@ -32,7 +33,6 @@
             <button type="submit" class="danger small">Delete</button>
           </form>
         </td>
-        {% endif %}
       </tr>
       {% endfor %}
     </tbody>
@@ -41,15 +41,44 @@
   <p class="empty">No devices enrolled yet.</p>
   {% endif %}
 
-  {% if user.is_admin %}
   <h2 style="margin-top:22px">Add device</h2>
+  <p class="muted">Leave name blank to let whoever redeems the token pick their own; set owner email to onboard a friend's first device under their own account instead of yours.</p>
   <form class="inline" action="/devices/enroll-token" method="post">
     <div>
-      <label for="device_name">Name</label>
-      <input id="device_name" name="device_name" placeholder="wb01" required pattern="[a-zA-Z0-9_-]{1,63}">
+      <label for="device_name">Name (optional)</label>
+      <input id="device_name" name="device_name" placeholder="wb01" pattern="[a-zA-Z0-9_-]{1,63}">
+    </div>
+    <div>
+      <label for="owner_email">Owner email (optional, default: you)</label>
+      <input id="owner_email" name="owner_email" type="email" placeholder="friend@example.com">
     </div>
     <button type="submit">Create enroll command</button>
   </form>
+</section>
+
+<section class="card">
+  <h2>Pending enroll tokens</h2>
+  {% if pending_tokens %}
+  <table>
+    <thead><tr><th>Name</th><th>Owner</th><th>Created</th><th>Expires</th><th></th></tr></thead>
+    <tbody>
+      {% for t in pending_tokens %}
+      <tr>
+        <td class="mono">{{ t.device_name_hint or "(picked at enroll time)" }}</td>
+        <td class="muted">{{ t.owner_email }}</td>
+        <td class="muted">{{ t.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+        <td class="muted">{{ t.expires_at.strftime("%Y-%m-%d %H:%M") }}</td>
+        <td>
+          <form action="/enroll-tokens/{{ t.id }}/revoke" method="post" style="margin:0">
+            <button type="submit" class="danger small">Revoke</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No unredeemed tokens.</p>
   {% endif %}
 </section>
 
@@ -73,14 +102,13 @@
   <p class="empty">No services yet.</p>
   {% endif %}
 
-  {% if user.is_admin %}
   {% if devices %}
   <h2 style="margin-top:22px">Add service</h2>
   <form class="inline" action="/services" method="post">
     <div>
       <label for="svc_device">Device</label>
       <select id="svc_device" name="device_id" required>
-        {% for d in devices if not d.revoked_at %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+        {% for d in devices if not d.revoked %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
       </select>
     </div>
     <div>
@@ -102,14 +130,13 @@
   {% else %}
   <p class="muted">Add a device first.</p>
   {% endif %}
-  {% endif %}
 </section>
 
 <section class="card">
   <h2>Access grants</h2>
   {% if grants %}
   <table>
-    <thead><tr><th>Service</th><th>Exposed by</th><th>Granted to</th><th>Status</th>{% if user.is_admin %}<th></th>{% endif %}</tr></thead>
+    <thead><tr><th>Service</th><th>Exposed by</th><th>Granted to</th><th>Status</th><th></th></tr></thead>
     <tbody>
       {% for g in grants %}
       <tr>
@@ -120,7 +147,6 @@
           {% if g.revoked %}<span class="pill revoked">revoked</span>
           {% else %}<span class="pill active">active</span>{% endif %}
         </td>
-        {% if user.is_admin %}
         <td>
           {% if not g.revoked %}
           <form action="/grants/{{ g.id }}/revoke" method="post" style="margin:0">
@@ -128,7 +154,6 @@
           </form>
           {% endif %}
         </td>
-        {% endif %}
       </tr>
       {% endfor %}
     </tbody>
@@ -137,7 +162,6 @@
   <p class="empty">No grants yet &mdash; nobody can reach anybody.</p>
   {% endif %}
 
-  {% if user.is_admin %}
   {% if services and devices %}
   <h2 style="margin-top:22px">Grant access</h2>
   <form class="inline" action="/grants" method="post">
@@ -150,7 +174,7 @@
     <div>
       <label for="grant_consumer">Consumer device</label>
       <select id="grant_consumer" name="consumer_device_id" required>
-        {% for d in devices if not d.revoked_at %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+        {% for d in devices if not d.revoked %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
       </select>
     </div>
     <button type="submit">Grant</button>
@@ -158,19 +182,27 @@
   {% else %}
   <p class="muted">Add a device and a service first.</p>
   {% endif %}
-  {% endif %}
 </section>
 
-{% if user.is_admin %}
 <section class="card">
-  <h2>Invite a user</h2>
-  <form class="inline" action="/users/invite" method="post">
-    <div>
-      <label for="invite_email">Email</label>
-      <input id="invite_email" name="email" type="email" placeholder="friend@example.com" required>
-    </div>
-    <button type="submit">Create invite link</button>
-  </form>
+  <h2>Users</h2>
+  <table>
+    <thead><tr><th>Email</th><th>Role</th><th>Devices</th><th></th></tr></thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td class="mono">{{ u.email }}</td>
+        <td class="muted">{{ "admin" if u.is_admin else "user" }}</td>
+        <td class="mono">{{ u.device_count }}</td>
+        <td>
+          <form action="/users/{{ u.id }}/delete" method="post" style="margin:0"
+                onsubmit="return confirm('Delete {{ u.email }} and all {{ u.device_count }} of their device(s) permanently?');">
+            <button type="submit" class="danger small">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </section>
-{% endif %}
 {% endblock %}

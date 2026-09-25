@@ -2,17 +2,15 @@ import datetime
 
 import pytest
 
-from frp_jump.common.models import TokenPurpose
 from frp_jump.server import auth
 
 _LOGIN_TTL = datetime.timedelta(hours=1)
-_INVITE_TTL = datetime.timedelta(days=7)
 _SESSION_TTL = datetime.timedelta(days=30)
 
 
 def _issue_login(db_session, email: str, *, created_by: str | None = None) -> str:
     return auth.issue_login_token(
-        db_session, email=email, purpose=TokenPurpose.LOGIN, created_by=created_by, ttl=_LOGIN_TTL
+        db_session, email=email, created_by=created_by, ttl=_LOGIN_TTL
     )
 
 
@@ -28,17 +26,13 @@ def test_first_ever_redeemed_user_becomes_admin(db_session) -> None:
     assert user.is_admin is True
 
 
-def test_second_invited_user_is_not_admin(db_session) -> None:
+def test_second_logged_in_user_is_not_admin(db_session) -> None:
     admin = auth.redeem_login_token(db_session, _issue_login(db_session, "admin@example.com"))
 
-    invite = auth.issue_login_token(
-        db_session,
-        email="friend@example.com",
-        purpose=TokenPurpose.INVITE,
-        created_by=admin.id,
-        ttl=_INVITE_TTL,
+    second = auth.issue_login_token(
+        db_session, email="friend@example.com", created_by=admin.id, ttl=_LOGIN_TTL
     )
-    friend = auth.redeem_login_token(db_session, invite)
+    friend = auth.redeem_login_token(db_session, second)
     assert friend.is_admin is False
 
 
@@ -53,7 +47,6 @@ def test_login_token_expired_is_rejected(db_session) -> None:
     token = auth.issue_login_token(
         db_session,
         email="admin@example.com",
-        purpose=TokenPurpose.LOGIN,
         created_by=None,
         ttl=datetime.timedelta(seconds=-1),
     )

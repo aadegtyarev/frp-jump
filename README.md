@@ -28,29 +28,42 @@ relayed through your server.
 
 ## Installing the CLI
 
-Not published anywhere (PyPI, etc.) — install by cloning this repo, on
-**every** machine that will run either `frp-jump server ...` or
-`frp-jump client ...` (the server box, and each device you connect):
+Not published to PyPI — install on **every** machine that will run either
+`frp-jump server ...` or `frp-jump client ...` (the server box, and each
+device you connect), Python 3.12+ required (already present on any recent
+Debian/Ubuntu, including Wiren Board controllers). Two ways:
+
+**From a tagged release** (built by `.github/workflows/release.yml`,
+shows up under this repo's *Releases* tab):
 
 ```sh
-git clone <this-repo-url>
-cd frp-jump
-python3 -m venv .venv          # needs the venv module: on some distros
-                                # that's a separate package, e.g. Debian/
-                                # Ubuntu `apt install python3-venv`
-.venv/bin/pip install -e .
-.venv/bin/frp-jump --help
+python3 -m venv .venv    # needs the venv module: on Debian/Ubuntu that's
+                          # a separate package, `apt install python3-venv`
+gh release download v0.1.0 --repo aadegtyarev/frp-jump --pattern '*.whl' -O frp_jump.whl
+.venv/bin/pip install frp_jump.whl
 ```
 
-(`uv sync` works too if you have [uv](https://docs.astral.sh/uv/) —
-either way you end up with `frp-jump` in that venv.) If the repo is
-private, whatever machine clones it needs read access — your own
-laptop/account SSH key usually already has it; a server or CI box that
-shouldn't have your personal key gets its own **read-only deploy key**
-added to the repo instead (`gh repo deploy-key add`).
+Needs the [`gh` CLI](https://cli.github.com/) authenticated
+(`gh auth login`) since the repo is private — fine on your own machine,
+probably not worth installing just for a headless device (see below).
 
-Put `.venv/bin` on `PATH`, or just call `.venv/bin/frp-jump` directly —
-the rest of this README says `frp-jump` for brevity.
+**Directly from a git tag** (no release/wheel involved, works anywhere
+you can already `git clone` the repo — e.g. via the same **read-only
+deploy key** pattern used for node1 in `docs/architecture.md`; `gh repo
+deploy-key add` to mint one per device):
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install "git+ssh://git@github.com/aadegtyarev/frp-jump.git@v0.1.0"
+```
+
+Either way you end up with `frp-jump` in that venv — put `.venv/bin` on
+`PATH`, or call `.venv/bin/frp-jump` directly. The rest of this README
+just says `frp-jump`.
+
+To cut a new release: `git tag vX.Y.Z && git push origin vX.Y.Z` (bump
+`version` in `pyproject.toml` first) — the workflow builds and publishes
+it automatically.
 
 ## Quick start
 

@@ -6,24 +6,25 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
-### Added
-
-- `packaging/scripts/frp-jump-login-link`: wrapper around
-  `server login-link` for a systemd deployment, so minting a fresh
-  login/invite link doesn't require hand-assembling the
-  `EnvironmentFile` incantation every time
-- README: an explicit "Installing the CLI" section (git clone + venv;
-  this isn't published to PyPI), and pointers to where the enroll token
-  and login links actually come from
-
 ## [0.1.0] - 2026-09-25
 
 First working version: server, device agent, and WebUI, verified end to
 end against real `frp` binaries — including a live xtcp hole-punch
 timeout falling back to stcp relay, and `ssh <alias>` reaching a real
-`sshd` through the tunnel.
+`sshd` through the tunnel. Deployed for real on the first server the same
+day (see the Security section below for what that turned up).
 
 ### Added
+
+- `.github/workflows/release.yml`: on a `vX.Y.Z` tag, builds a wheel +
+  sdist (`uv build`) and publishes them as a GitHub Release
+- `packaging/scripts/frp-jump-login-link`: wrapper around
+  `server login-link` for a systemd deployment, so minting a fresh
+  login/invite link doesn't require hand-assembling the
+  `EnvironmentFile` incantation every time
+- README: an explicit "Installing the CLI" section (this isn't
+  published to PyPI — install from a tagged release or `git+ssh`), and
+  pointers to where the enroll token and login links actually come from
 
 - Private CA (`common/pki.py`) issuing mTLS device certs; a single
   `Settings` source of truth for every port/TTL/version/path

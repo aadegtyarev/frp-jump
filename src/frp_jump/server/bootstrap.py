@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from frp_jump.common.models import TokenPurpose
-from frp_jump.common.pki import CertificateAuthority, KeyCertPair
+from frp_jump.common.pki import CertificateAuthority, KeyCertPair, write_private_key
 from frp_jump.common.settings import Settings
 from frp_jump.server import auth
 from frp_jump.server.db import make_engine, make_session
@@ -46,8 +46,7 @@ def load_or_create_ca(settings: Settings) -> CertificateAuthority:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     ca = CertificateAuthority.bootstrap("frp-jump CA")
     cert_path.write_bytes(ca.cert_pem)
-    key_path.write_bytes(ca.pair.key_pem)
-    key_path.chmod(0o600)
+    write_private_key(key_path, ca.pair.key_pem)
     return ca
 
 
@@ -69,8 +68,7 @@ def load_or_create_relay_cert(settings: Settings, ca: CertificateAuthority) -> K
     cert_path.parent.mkdir(parents=True, exist_ok=True)
     pair = ca.issue("relay", san_names=[settings.relay_public_addr])
     cert_path.write_bytes(pair.cert_pem)
-    key_path.write_bytes(pair.key_pem)
-    key_path.chmod(0o600)
+    write_private_key(key_path, pair.key_pem)
     return pair
 
 

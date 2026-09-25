@@ -13,6 +13,16 @@ Auth boundaries in this system:
   depend on it.
 - The WebUI is a human, authenticated by ``Session``, obtained by visiting
   a ``LoginToken`` link the admin generated and hand-delivered.
+
+Revocation (``Device.revoked_at`` / ``Grant.revoked_at``) is enforced at
+the control-plane only: a revoked device stops authenticating to the API
+(``registry.get_device_by_api_token``), and a revoked grant drops out of
+both sides' desired-state on their next poll, so the agent removes it from
+its running frpc config. It is NOT enforced by frps/mTLS directly -- a
+device whose frpc is already connected keeps that connection (and
+whatever it was last configured to relay) until it reconnects or the
+relay restarts. Hard revocation means rotating the CA. See
+docs/architecture.md.
 """
 
 from __future__ import annotations
@@ -91,6 +101,7 @@ class Device(SQLModel, table=True):
     enrolled_at: datetime.datetime = Field(default_factory=_now)
     last_seen_at: datetime.datetime | None = None
     agent_version: str | None = None
+    revoked_at: datetime.datetime | None = None
 
 
 class EnrollToken(SQLModel, table=True):
@@ -124,3 +135,4 @@ class Grant(SQLModel, table=True):
     consumer_device_id: str = Field(foreign_key="devices.id", index=True)
     secret: str
     created_at: datetime.datetime = Field(default_factory=_now)
+    revoked_at: datetime.datetime | None = None

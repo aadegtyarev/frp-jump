@@ -108,6 +108,18 @@ def run() -> None:
         )
 
     try:
-        uvicorn.run(web_app, host=settings.webui_host, port=settings.webui_port, **ssl_kwargs)
+        # access_log=False: uvicorn's default access log would write the
+        # full request path -- including the raw magic-link token on every
+        # `GET /auth/<token>` -- to stdout/journald. These tokens are
+        # single-use and short-lived, but an unredeemed one (e.g. a
+        # `server login-link` nobody opened yet) would sit valid in the
+        # log for its full TTL otherwise.
+        uvicorn.run(
+            web_app,
+            host=settings.webui_host,
+            port=settings.webui_port,
+            access_log=False,
+            **ssl_kwargs,
+        )
     finally:
         relay.stop()

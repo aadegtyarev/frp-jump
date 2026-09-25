@@ -1,6 +1,7 @@
 import datetime
 
 import pytest
+import sqlalchemy
 
 from frp_jump.driver.base import ServiceProtocol
 from frp_jump.server import registry
@@ -23,6 +24,43 @@ def test_get_or_create_user_is_idempotent_by_email(db_session) -> None:
     a = registry.get_or_create_user(db_session, "x@example.com")
     b = registry.get_or_create_user(db_session, "x@example.com")
     assert a.id == b.id
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "wb01\nHost evil",  # newline injection into ssh_config
+        "wb01 evil",
+        "",
+        "-leading-hyphen",
+        "a" * 64,  # too long
+        "wb/01",
+        "wb01;rm -rf",
+    ],
+)
+def test_create_enroll_token_rejects_dangerous_names(db_session, bad_name) -> None:
+    admin = _make_admin(db_session)
+    with pytest.raises(registry.ValidationError):
+        registry.create_enroll_token(
+            db_session, device_name_hint=bad_name, created_by=admin.id, ttl=_TTL
+        )
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    ["wb01-ssh\nHost evil", "wb01 ssh", "", "a" * 64],
+)
+def test_create_service_rejects_dangerous_names(db_session, bad_name) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    with pytest.raises(registry.ValidationError):
+        registry.create_service(
+            db_session,
+            device_id=exposer.device.id,
+            name=bad_name,
+            protocol=ServiceProtocol.SSH,
+            target_port=22,
+        )
 
 
 def test_create_enroll_token_rejects_duplicate_device_name(db_session) -> None:
@@ -151,6 +189,47 @@ def test_create_grant_rejects_duplicate_pair(db_session) -> None:
         )
 
 
+def test_create_service_rejects_nonexistent_device(db_session) -> None:
+    with pytest.raises(registry.NotFoundError):
+        registry.create_service(
+            db_session,
+            device_id="no-such-device",
+            name="wb01-ssh",
+            protocol=ServiceProtocol.SSH,
+            target_port=22,
+        )
+
+
+def test_create_grant_rejects_nonexistent_service(db_session) -> None:
+    admin = _make_admin(db_session)
+    consumer = _enroll(db_session, admin, "laptop")
+    with pytest.raises(registry.NotFoundError):
+        registry.create_grant(
+            db_session, service_id="no-such-service", consumer_device_id=consumer.device.id
+        )
+
+
+def test_create_grant_rejects_nonexistent_consumer_device(db_session) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    service = registry.create_service(
+        db_session,
+        device_id=exposer.device.id,
+        name="wb01-ssh",
+        protocol=ServiceProtocol.SSH,
+        target_port=22,
+    )
+    with pytest.raises(registry.NotFoundError):
+        registry.create_grant(
+            db_session, service_id=service.id, consumer_device_id="no-such-device"
+        )
+
+
+def test_foreign_keys_are_enforced_at_the_sqlite_level(db_session) -> None:
+    result = db_session.exec(sqlalchemy.text("PRAGMA foreign_keys")).first()
+    assert result[0] == 1
+
+
 def test_exposed_and_consumed_grant_views(db_session) -> None:
     admin = _make_admin(db_session)
     exposer = _enroll(db_session, admin, "wb01")
@@ -227,3 +306,111 @@ def test_list_devices_returns_all(db_session) -> None:
     _enroll(db_session, admin, "laptop")
     names = {d.name for d in registry.list_devices(db_session)}
     assert names == {"wb01", "laptop"}
+
+
+# --- revocation --------------------------------------------------------
+
+
+def test_revoke_device_marks_it_revoked(db_session) -> None:
+    admin = _make_admin(db_session)
+    enrolled = _enroll(db_session, admin, "wb01")
+    registry.revoke_device(db_session, enrolled.device.id)
+    device = registry.get_device(db_session, enrolled.device.id)
+    assert device.revoked_at is not None
+
+
+def test_revoke_device_rejects_unknown_id(db_session) -> None:
+    with pytest.raises(registry.NotFoundError):
+        registry.revoke_device(db_session, "no-such-device")
+
+
+def test_get_device_by_api_token_returns_none_for_a_revoked_device(db_session) -> None:
+    admin = _make_admin(db_session)
+    enrolled = _enroll(db_session, admin, "wb01")
+    registry.revoke_device(db_session, enrolled.device.id)
+    assert registry.get_device_by_api_token(db_session, enrolled.api_token) is None
+
+
+def test_revoke_grant_marks_it_revoked_in_list_grants_view(db_session) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    consumer = _enroll(db_session, admin, "laptop")
+    service = registry.create_service(
+        db_session,
+        device_id=exposer.device.id,
+        name="wb01-ssh",
+        protocol=ServiceProtocol.SSH,
+        target_port=22,
+    )
+    grant = registry.create_grant(
+        db_session, service_id=service.id, consumer_device_id=consumer.device.id
+    )
+    registry.revoke_grant(db_session, grant.id)
+    view = registry.list_grants_view(db_session)[0]
+    assert view.revoked is True
+
+
+def test_revoke_grant_rejects_unknown_id(db_session) -> None:
+    with pytest.raises(registry.NotFoundError):
+        registry.revoke_grant(db_session, "no-such-grant")
+
+
+def test_revoked_grant_disappears_from_both_sides_desired_state(db_session) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    consumer = _enroll(db_session, admin, "laptop")
+    service = registry.create_service(
+        db_session,
+        device_id=exposer.device.id,
+        name="wb01-ssh",
+        protocol=ServiceProtocol.SSH,
+        target_port=22,
+    )
+    grant = registry.create_grant(
+        db_session, service_id=service.id, consumer_device_id=consumer.device.id
+    )
+    assert len(registry.exposed_grants_for_device(db_session, exposer.device.id)) == 1
+    assert len(registry.consumed_grants_for_device(db_session, consumer.device.id)) == 1
+
+    registry.revoke_grant(db_session, grant.id)
+
+    assert registry.exposed_grants_for_device(db_session, exposer.device.id) == []
+    assert registry.consumed_grants_for_device(db_session, consumer.device.id) == []
+
+
+def test_revoked_consumer_device_drops_out_of_exposer_view(db_session) -> None:
+    """Revoking a device, not just a specific grant, should also stop the
+    exposer from continuing to offer it that service."""
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    consumer = _enroll(db_session, admin, "laptop")
+    service = registry.create_service(
+        db_session,
+        device_id=exposer.device.id,
+        name="wb01-ssh",
+        protocol=ServiceProtocol.SSH,
+        target_port=22,
+    )
+    registry.create_grant(db_session, service_id=service.id, consumer_device_id=consumer.device.id)
+
+    registry.revoke_device(db_session, consumer.device.id)
+
+    assert registry.exposed_grants_for_device(db_session, exposer.device.id) == []
+
+
+def test_revoked_exposer_device_drops_out_of_consumer_view(db_session) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    consumer = _enroll(db_session, admin, "laptop")
+    service = registry.create_service(
+        db_session,
+        device_id=exposer.device.id,
+        name="wb01-ssh",
+        protocol=ServiceProtocol.SSH,
+        target_port=22,
+    )
+    registry.create_grant(db_session, service_id=service.id, consumer_device_id=consumer.device.id)
+
+    registry.revoke_device(db_session, exposer.device.id)
+
+    assert registry.consumed_grants_for_device(db_session, consumer.device.id) == []

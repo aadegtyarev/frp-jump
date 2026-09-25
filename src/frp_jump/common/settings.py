@@ -59,6 +59,11 @@ class Settings(BaseSettings):
 
     # agent
     agent_poll_interval_seconds: float = 30.0
+    # Consumed-grant local bind ports come from this range, not the kernel's
+    # ephemeral port range -- picking from the ephemeral range risks the OS
+    # handing out the same port for an unrelated outbound connection later.
+    agent_local_port_range_start: int = 40000
+    agent_local_port_range_end: int = 40999
     # Where to maintain the `Include` line + managed Host blocks for consumed
     # SSH grants. Defaults to the invoking user's own ~/.ssh/config -- override
     # when running as a dedicated service account that isn't the human's login.

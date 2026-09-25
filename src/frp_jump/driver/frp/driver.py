@@ -21,6 +21,7 @@ from pathlib import Path
 
 import tomli_w
 
+from frp_jump.common.pki import write_private_key
 from frp_jump.driver.base import (
     DesiredState,
     DriverStatus,
@@ -42,7 +43,7 @@ def _write_tls_files(
     key_file = tls_dir / "tls.key"
     ca_file = tls_dir / "ca.crt"
     cert_file.write_bytes(desired_or_relay.cert_pem)
-    key_file.write_bytes(desired_or_relay.key_pem)
+    write_private_key(key_file, desired_or_relay.key_pem)
     ca_file.write_bytes(desired_or_relay.ca_cert_pem)
     return str(cert_file), str(key_file), str(ca_file)
 

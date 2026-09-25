@@ -8,14 +8,27 @@
   <h2>Devices</h2>
   {% if devices %}
   <table>
-    <thead><tr><th>Name</th><th>Enrolled</th><th>Last seen</th><th>Agent</th></tr></thead>
+    <thead><tr><th>Name</th><th>Status</th><th>Enrolled</th><th>Last seen</th><th>Agent</th>{% if user.is_admin %}<th></th>{% endif %}</tr></thead>
     <tbody>
       {% for d in devices %}
       <tr>
         <td class="mono">{{ d.name }}</td>
+        <td>
+          {% if d.revoked_at %}<span class="pill revoked">revoked</span>
+          {% else %}<span class="pill active">active</span>{% endif %}
+        </td>
         <td class="muted">{{ d.enrolled_at.strftime("%Y-%m-%d") }}</td>
         <td class="muted">{{ d.last_seen_at.strftime("%Y-%m-%d %H:%M") if d.last_seen_at else "never" }}</td>
         <td class="muted">{{ d.agent_version or "—" }}</td>
+        {% if user.is_admin %}
+        <td>
+          {% if not d.revoked_at %}
+          <form action="/devices/{{ d.id }}/revoke" method="post" style="margin:0">
+            <button type="submit" class="danger small">Revoke</button>
+          </form>
+          {% endif %}
+        </td>
+        {% endif %}
       </tr>
       {% endfor %}
     </tbody>
@@ -24,14 +37,16 @@
   <p class="empty">No devices enrolled yet.</p>
   {% endif %}
 
+  {% if user.is_admin %}
   <h2 style="margin-top:22px">Add device</h2>
   <form class="inline" action="/devices/enroll-token" method="post">
     <div>
       <label for="device_name">Name</label>
-      <input id="device_name" name="device_name" placeholder="wb01" required pattern="[a-zA-Z0-9_-]+">
+      <input id="device_name" name="device_name" placeholder="wb01" required pattern="[a-zA-Z0-9_-]{1,63}">
     </div>
     <button type="submit">Create enroll command</button>
   </form>
+  {% endif %}
 </section>
 
 <section class="card">
@@ -54,18 +69,19 @@
   <p class="empty">No services yet.</p>
   {% endif %}
 
+  {% if user.is_admin %}
   {% if devices %}
   <h2 style="margin-top:22px">Add service</h2>
   <form class="inline" action="/services" method="post">
     <div>
       <label for="svc_device">Device</label>
       <select id="svc_device" name="device_id" required>
-        {% for d in devices %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+        {% for d in devices if not d.revoked_at %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
       </select>
     </div>
     <div>
       <label for="svc_name">Name</label>
-      <input id="svc_name" name="name" placeholder="wb01-ssh" required pattern="[a-zA-Z0-9_-]+">
+      <input id="svc_name" name="name" placeholder="wb01-ssh" required pattern="[a-zA-Z0-9_-]{1,63}">
     </div>
     <div>
       <label for="svc_protocol">Protocol</label>
@@ -82,19 +98,33 @@
   {% else %}
   <p class="muted">Add a device first.</p>
   {% endif %}
+  {% endif %}
 </section>
 
 <section class="card">
   <h2>Access grants</h2>
   {% if grants %}
   <table>
-    <thead><tr><th>Service</th><th>Exposed by</th><th>Granted to</th></tr></thead>
+    <thead><tr><th>Service</th><th>Exposed by</th><th>Granted to</th><th>Status</th>{% if user.is_admin %}<th></th>{% endif %}</tr></thead>
     <tbody>
       {% for g in grants %}
       <tr>
         <td class="mono">{{ g.service_name }}</td>
         <td class="mono">{{ g.exposer_device_name }}</td>
         <td class="mono">{{ g.consumer_device_name }}</td>
+        <td>
+          {% if g.revoked %}<span class="pill revoked">revoked</span>
+          {% else %}<span class="pill active">active</span>{% endif %}
+        </td>
+        {% if user.is_admin %}
+        <td>
+          {% if not g.revoked %}
+          <form action="/grants/{{ g.id }}/revoke" method="post" style="margin:0">
+            <button type="submit" class="danger small">Revoke</button>
+          </form>
+          {% endif %}
+        </td>
+        {% endif %}
       </tr>
       {% endfor %}
     </tbody>
@@ -103,6 +133,7 @@
   <p class="empty">No grants yet &mdash; nobody can reach anybody.</p>
   {% endif %}
 
+  {% if user.is_admin %}
   {% if services and devices %}
   <h2 style="margin-top:22px">Grant access</h2>
   <form class="inline" action="/grants" method="post">
@@ -115,13 +146,14 @@
     <div>
       <label for="grant_consumer">Consumer device</label>
       <select id="grant_consumer" name="consumer_device_id" required>
-        {% for d in devices %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+        {% for d in devices if not d.revoked_at %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
       </select>
     </div>
     <button type="submit">Grant</button>
   </form>
   {% else %}
   <p class="muted">Add a device and a service first.</p>
+  {% endif %}
   {% endif %}
 </section>
 

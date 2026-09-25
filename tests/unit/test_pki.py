@@ -1,6 +1,6 @@
 from cryptography import x509
 
-from frp_jump.common.pki import CertificateAuthority
+from frp_jump.common.pki import CertificateAuthority, write_private_key
 
 
 def test_bootstrap_creates_self_signed_ca() -> None:
@@ -60,3 +60,18 @@ def test_serial_number_matches_certificate() -> None:
     leaf = ca.issue("wb01")
     cert = x509.load_pem_x509_certificate(leaf.cert_pem)
     assert leaf.serial_number == cert.serial_number
+
+
+def test_write_private_key_sets_restrictive_permissions(tmp_path) -> None:
+    path = tmp_path / "key.pem"
+    write_private_key(path, b"secret bytes")
+    assert path.read_bytes() == b"secret bytes"
+    mode = path.stat().st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_write_private_key_overwrites_existing_file(tmp_path) -> None:
+    path = tmp_path / "key.pem"
+    write_private_key(path, b"old")
+    write_private_key(path, b"new")
+    assert path.read_bytes() == b"new"

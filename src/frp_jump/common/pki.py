@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import datetime
 import ipaddress
+import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -19,6 +21,18 @@ from cryptography.hazmat.primitives.asymmetric.types import (
     CertificateIssuerPrivateKeyTypes,
 )
 from cryptography.x509.oid import NameOID
+
+
+def write_private_key(path: Path, data: bytes) -> None:
+    """Write a private key with restrictive permissions from creation, not
+    chmod after -- chmod-after-write leaves a window where the key is
+    readable by anyone on the box (default umask)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+
 
 _CURVE = ec.SECP256R1()
 _CERT_VALIDITY = datetime.timedelta(days=825)
@@ -185,7 +199,15 @@ class CertificateAuthority:
         )
 
     def verify_chain(self, cert_pem: bytes) -> bool:
-        """True if ``cert_pem`` was issued by this CA and is currently valid."""
+        """True if ``cert_pem`` was issued by this CA and is currently valid.
+
+        Test/debug helper only -- it checks the signature and validity
+        window but not ``BasicConstraints``/``KeyUsage``/issuer-name match,
+        so it is not a sound chain-validation primitive. Not used on any
+        real auth path: actual mTLS chain verification is delegated to
+        frp/Go (``transport.tls.trustedCaFile`` + ``force = true``), which
+        is the right call. Do not start relying on this for access control.
+        """
         cert = x509.load_pem_x509_certificate(cert_pem)
         try:
             self._cert.public_key().verify(

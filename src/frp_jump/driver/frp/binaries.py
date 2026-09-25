@@ -2,10 +2,15 @@
 
 Trust model: binaries are fetched over HTTPS straight from the official
 ``fatedier/frp`` GitHub release, and checked against the sha256 digest the
-same release publishes in ``frp_sha256_checksums.txt``. That guards against
-a corrupted/truncated download or a MITM on a connection that isn't
-actually TLS-protected; it does not guard against a compromised upstream
-release — acceptable for this project's threat model (see README).
+same release publishes in ``frp_sha256_checksums.txt``. Since both files
+come from the same connection/host, this only guards against a
+corrupted/truncated download -- it is NOT an independent integrity check
+against a compromised connection or a compromised upstream release (an
+attacker who can tamper with one response can tamper with both). A
+stronger guarantee would mean pinning the expected per-arch digests next
+to ``frp_version`` in settings.py instead of trusting a file fetched at
+install time; not done here -- acceptable for this project's threat model
+(see README), but worth revisiting if that changes.
 """
 
 from __future__ import annotations

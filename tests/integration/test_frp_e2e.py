@@ -141,3 +141,99 @@ def test_grant_proxies_traffic_from_consumer_to_exposer(tmp_path, frp_binaries) 
         consumer.stop()
         exposer.stop()
         relay.stop()
+
+
+def test_frps_rejects_a_client_whose_cert_chains_to_a_different_ca(tmp_path, frp_binaries) -> None:
+    """The core security claim (docs: "an unenrolled device cannot reach the
+    relay at all") was previously asserted only in prose. This checks it
+    against a real frps: `force=true` + `trustedCaFile` must reject a
+    structurally valid cert that simply chains to the wrong CA, same as it
+    would reject a device that was never enrolled at all.
+    """
+    real_ca = CertificateAuthority.bootstrap("real CA")
+    rogue_ca = CertificateAuthority.bootstrap("rogue CA")
+
+    relay_port = _free_port()
+    target_port = _free_port()
+    local_bind_port = _free_port()
+    grant_secret = generate_token()
+
+    relay = FrpsRelayDriver(
+        binary=frp_binaries.frps, state_dir=tmp_path / "relay", admin_port=_free_port()
+    )
+    server_pair = real_ca.issue("relay", san_names=["127.0.0.1"])
+    relay.apply(
+        RelayState(
+            bind_port=relay_port,
+            ca_cert_pem=real_ca.cert_pem,
+            cert_pem=server_pair.cert_pem,
+            key_pem=server_pair.key_pem,
+        )
+    )
+
+    # The exposer presents a cert issued by a DIFFERENT CA than the one
+    # frps trusts -- everything else about it is a legitimate, validly
+    # signed certificate.
+    rogue_exposer_pair = rogue_ca.issue("exposer")
+    exposer = FrpDriver(
+        binary=frp_binaries.frpc,
+        state_dir=tmp_path / "rogue-exposer",
+        admin_port=_free_port(),
+        fallback_timeout_ms=1500,
+    )
+
+    consumer = FrpDriver(
+        binary=frp_binaries.frpc,
+        state_dir=tmp_path / "consumer",
+        admin_port=_free_port(),
+        fallback_timeout_ms=1500,
+    )
+    consumer_pair = real_ca.issue("consumer")
+
+    try:
+        with _run_http_server(target_port):
+            exposer.apply(
+                DesiredState(
+                    device_id="rogue-exposer",
+                    server_addr="127.0.0.1",
+                    server_port=relay_port,
+                    ca_cert_pem=real_ca.cert_pem,
+                    cert_pem=rogue_exposer_pair.cert_pem,
+                    key_pem=rogue_exposer_pair.key_pem,
+                    exposed=(
+                        ExposedService(grant_id="g1", secret=grant_secret, local_port=target_port),
+                    ),
+                )
+            )
+            consumer.apply(
+                DesiredState(
+                    device_id="consumer",
+                    server_addr="127.0.0.1",
+                    server_port=relay_port,
+                    ca_cert_pem=real_ca.cert_pem,
+                    cert_pem=consumer_pair.cert_pem,
+                    key_pem=consumer_pair.key_pem,
+                    consumed=(
+                        ConsumedGrant(
+                            grant_id="g1", secret=grant_secret, local_bind_port=local_bind_port
+                        ),
+                    ),
+                )
+            )
+
+            # The positive-case test proves a valid pair comes up well within
+            # this window (fallback alone is 1.5s). If a rogue-CA exposer's
+            # proxy had been accepted, this grant would work the same way.
+            deadline = time.monotonic() + 8.0
+            while time.monotonic() < deadline:
+                with contextlib.suppress(httpx.HTTPError):
+                    resp = httpx.get(f"http://127.0.0.1:{local_bind_port}", timeout=1.0)
+                    assert resp.status_code != 200, (
+                        "tunnel came up despite the exposer's cert chaining to a "
+                        "different CA than frps trusts -- mTLS enforcement is broken"
+                    )
+                time.sleep(0.5)
+    finally:
+        consumer.stop()
+        exposer.stop()
+        relay.stop()

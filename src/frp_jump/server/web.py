@@ -32,6 +32,10 @@ class RequireLogin(Exception):
     """No valid session; the app-level exception handler redirects to /login."""
 
 
+class Forbidden(Exception):
+    """Logged in, but not allowed to do this; the app-level handler shows an error page."""
+
+
 def current_user(request: Request, db: Annotated[DbSession, Depends(get_db)]) -> User:
     user = auth.get_current_user(db, request.cookies.get(SESSION_COOKIE))
     if user is None:
@@ -39,8 +43,32 @@ def current_user(request: Request, db: Annotated[DbSession, Depends(get_db)]) ->
     return user
 
 
+def require_admin(user: Annotated[User, Depends(current_user)]) -> User:
+    """Fleet-mutating actions (add device, add service, grant access) are
+    admin-only -- a non-admin invited user can view the dashboard but not
+    reach into devices they don't own."""
+    if not user.is_admin:
+        raise Forbidden()
+    return user
+
+
 def _page(request: Request, name: str, **context: object) -> HTMLResponse:
     return templates.TemplateResponse(request, name, context)
+
+
+def _cookie_is_secure(request: Request) -> bool:
+    """Whether to set the session cookie's `Secure` flag.
+
+    ``request.url.scheme`` alone is wrong for the documented deployment
+    (TLS-terminating reverse proxy -> plain HTTP to uvicorn): uvicorn only
+    ever sees "http" there, so the cookie would silently lose `Secure` and
+    ride along any plaintext request to the same host. Trust
+    ``public_base_url`` (the actual externally-visible URL) too.
+    """
+    settings = request.app.state.settings
+    if request.url.scheme == "https":
+        return True
+    return bool(settings.public_base_url) and settings.public_base_url.startswith("https://")
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -63,7 +91,7 @@ def redeem_login(token: str, request: Request, db: Annotated[DbSession, Depends(
         SESSION_COOKIE,
         session_token,
         httponly=True,
-        secure=request.url.scheme == "https",
+        secure=_cookie_is_secure(request),
         samesite="lax",
         max_age=int(ttl.total_seconds()),
     )
@@ -101,7 +129,7 @@ def dashboard(
 def create_enroll_token(
     request: Request,
     db: Annotated[DbSession, Depends(get_db)],
-    user: Annotated[User, Depends(current_user)],
+    user: Annotated[User, Depends(require_admin)],
     device_name: Annotated[str, Form()],
 ):
     settings = request.app.state.settings
@@ -112,7 +140,7 @@ def create_enroll_token(
             created_by=user.id,
             ttl=datetime.timedelta(hours=settings.enroll_token_ttl_hours),
         )
-    except registry.ConflictError as exc:
+    except (registry.ConflictError, registry.ValidationError) as exc:
         return _page(request, "result.html", title="Add device", error=str(exc))
 
     control_url = settings.public_base_url or (
@@ -132,12 +160,9 @@ def create_enroll_token(
 def invite_user(
     request: Request,
     db: Annotated[DbSession, Depends(get_db)],
-    user: Annotated[User, Depends(current_user)],
+    user: Annotated[User, Depends(require_admin)],
     email: Annotated[str, Form()],
 ):
-    if not user.is_admin:
-        return _page(request, "result.html", title="Invite", error="only an admin can invite users")
-
     settings = request.app.state.settings
     token = auth.issue_login_token(
         db,
@@ -160,7 +185,7 @@ def invite_user(
 def create_service(
     request: Request,
     db: Annotated[DbSession, Depends(get_db)],
-    user: Annotated[User, Depends(current_user)],
+    user: Annotated[User, Depends(require_admin)],
     device_id: Annotated[str, Form()],
     name: Annotated[str, Form()],
     protocol: Annotated[str, Form()],
@@ -175,7 +200,7 @@ def create_service(
         registry.create_service(
             db, device_id=device_id, name=name, protocol=service_protocol, target_port=target_port
         )
-    except registry.ConflictError as exc:
+    except (registry.ConflictError, registry.ValidationError, registry.NotFoundError) as exc:
         return _page(request, "result.html", title="Add service", error=str(exc))
     return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -184,12 +209,46 @@ def create_service(
 def create_grant(
     request: Request,
     db: Annotated[DbSession, Depends(get_db)],
-    user: Annotated[User, Depends(current_user)],
+    user: Annotated[User, Depends(require_admin)],
     service_id: Annotated[str, Form()],
     consumer_device_id: Annotated[str, Form()],
 ):
     try:
         registry.create_grant(db, service_id=service_id, consumer_device_id=consumer_device_id)
-    except registry.ConflictError as exc:
+    except (registry.ConflictError, registry.NotFoundError) as exc:
         return _page(request, "result.html", title="Grant access", error=str(exc))
+    return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/devices/{device_id}/revoke", response_class=HTMLResponse)
+def revoke_device(
+    device_id: str,
+    request: Request,
+    db: Annotated[DbSession, Depends(get_db)],
+    user: Annotated[User, Depends(require_admin)],
+):
+    """Stops the device authenticating to the control-plane API (heartbeat,
+    desired-state) from its next attempt on. Does NOT tear down a
+    connection it already has to the relay -- see the revocation note in
+    common/models.py."""
+    try:
+        registry.revoke_device(db, device_id)
+    except registry.NotFoundError as exc:
+        return _page(request, "result.html", title="Revoke device", error=str(exc))
+    return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/grants/{grant_id}/revoke", response_class=HTMLResponse)
+def revoke_grant(
+    grant_id: str,
+    request: Request,
+    db: Annotated[DbSession, Depends(get_db)],
+    user: Annotated[User, Depends(require_admin)],
+):
+    """Drops out of both sides' desired-state on their next poll -- not
+    instant, see the revocation note in common/models.py."""
+    try:
+        registry.revoke_grant(db, grant_id)
+    except registry.NotFoundError as exc:
+        return _page(request, "result.html", title="Revoke grant", error=str(exc))
     return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)

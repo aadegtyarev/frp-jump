@@ -23,6 +23,10 @@ def _ssh_config_path(settings: Settings) -> Path:
     return settings.ssh_config_path or (Path.home() / ".ssh" / "config")
 
 
+def _port_range(settings: Settings) -> range:
+    return range(settings.agent_local_port_range_start, settings.agent_local_port_range_end + 1)
+
+
 def _require_state(settings: Settings):
     state = load(settings.data_dir)
     if state is None:
@@ -82,6 +86,7 @@ def run_cmd(
         data_dir=settings.data_dir,
         ssh_config_path=_ssh_config_path(settings),
         poll_interval_seconds=settings.agent_poll_interval_seconds,
+        port_range=_port_range(settings),
         agent_version=agent_version,
     )
 

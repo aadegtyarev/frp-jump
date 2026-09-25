@@ -7,13 +7,22 @@ be unit-tested directly and reused by both the API and the WebUI.
 from __future__ import annotations
 
 import datetime
+import re
 from dataclasses import dataclass
 
+from sqlalchemy.orm import aliased as _aliased
 from sqlmodel import Session, select
 
 from frp_jump.common.crypto import generate_token, hash_token
 from frp_jump.common.models import Device, EnrollToken, Grant, Service, User
 from frp_jump.driver.base import ServiceProtocol
+
+# Device and service names end up in places that trust them structurally:
+# a device name becomes an x509 CN/SAN (common/pki.py), a service name
+# becomes an frp proxy/visitor name AND an ssh_config `Host` alias
+# (agent/hosts.py) -- a newline or shell metacharacter there is a path to
+# ssh config injection on every consuming device. Keep this strict.
+_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$")
 
 
 class NotFoundError(LookupError):
@@ -22,6 +31,18 @@ class NotFoundError(LookupError):
 
 class ConflictError(ValueError):
     pass
+
+
+class ValidationError(ValueError):
+    pass
+
+
+def _validate_name(name: str, *, what: str) -> None:
+    if not _NAME_RE.match(name):
+        raise ValidationError(
+            f"{what} {name!r} is invalid -- use 1-63 characters, "
+            "letters/digits/underscore/hyphen, starting with a letter or digit"
+        )
 
 
 def _now() -> datetime.datetime:
@@ -55,6 +76,7 @@ class IssuedEnrollToken:
 def create_enroll_token(
     session: Session, *, device_name_hint: str, created_by: str, ttl: datetime.timedelta
 ) -> IssuedEnrollToken:
+    _validate_name(device_name_hint, what="device name")
     if session.exec(select(Device).where(Device.name == device_name_hint)).first() is not None:
         raise ConflictError(f"device name {device_name_hint!r} already in use")
     pending = session.exec(
@@ -129,8 +151,14 @@ def redeem_enroll_token(
 
 
 def get_device_by_api_token(session: Session, api_token: str) -> Device | None:
+    """None for an unknown token OR a revoked device -- this is the control-plane
+    enforcement point for revocation (see common/models.py's module docstring
+    for what revocation does and does not cover)."""
     token_hash = hash_token(api_token)
-    return session.exec(select(Device).where(Device.api_token_hash == token_hash)).first()
+    device = session.exec(select(Device).where(Device.api_token_hash == token_hash)).first()
+    if device is None or device.revoked_at is not None:
+        return None
+    return device
 
 
 def get_device(session: Session, device_id: str) -> Device | None:
@@ -139,6 +167,15 @@ def get_device(session: Session, device_id: str) -> Device | None:
 
 def list_devices(session: Session) -> list[Device]:
     return list(session.exec(select(Device)))
+
+
+def revoke_device(session: Session, device_id: str) -> None:
+    device = session.get(Device, device_id)
+    if device is None:
+        raise NotFoundError(f"no such device {device_id!r}")
+    device.revoked_at = _now()
+    session.add(device)
+    session.commit()
 
 
 def record_heartbeat(session: Session, device: Device, *, agent_version: str | None = None) -> None:
@@ -155,6 +192,9 @@ def record_heartbeat(session: Session, device: Device, *, agent_version: str | N
 def create_service(
     session: Session, *, device_id: str, name: str, protocol: ServiceProtocol, target_port: int
 ) -> Service:
+    _validate_name(name, what="service name")
+    if session.get(Device, device_id) is None:
+        raise NotFoundError(f"no such device {device_id!r}")
     if session.exec(select(Service).where(Service.name == name)).first() is not None:
         raise ConflictError(f"service name {name!r} already in use")
     service = Service(device_id=device_id, name=name, protocol=protocol, target_port=target_port)
@@ -169,6 +209,10 @@ def list_services_for_device(session: Session, device_id: str) -> list[Service]:
 
 
 def create_grant(session: Session, *, service_id: str, consumer_device_id: str) -> Grant:
+    if session.get(Service, service_id) is None:
+        raise NotFoundError(f"no such service {service_id!r}")
+    if session.get(Device, consumer_device_id) is None:
+        raise NotFoundError(f"no such device {consumer_device_id!r}")
     existing = session.exec(
         select(Grant).where(
             Grant.service_id == service_id, Grant.consumer_device_id == consumer_device_id
@@ -187,6 +231,15 @@ def create_grant(session: Session, *, service_id: str, consumer_device_id: str) 
 
 def list_grants_for_service(session: Session, service_id: str) -> list[Grant]:
     return list(session.exec(select(Grant).where(Grant.service_id == service_id)))
+
+
+def revoke_grant(session: Session, grant_id: str) -> None:
+    grant = session.get(Grant, grant_id)
+    if grant is None:
+        raise NotFoundError(f"no such grant {grant_id!r}")
+    grant.revoked_at = _now()
+    session.add(grant)
+    session.commit()
 
 
 # --- dashboard views (for the WebUI) --------------------------------------
@@ -210,6 +263,7 @@ class GrantView:
     exposer_device_name: str
     consumer_device_id: str
     consumer_device_name: str
+    revoked: bool
 
 
 def list_services_view(session: Session) -> list[ServiceView]:
@@ -242,6 +296,7 @@ def list_grants_view(session: Session) -> list[GrantView]:
             exposer_device_name=exposer_device.name,
             consumer_device_id=grant.consumer_device_id,
             consumer_device_name=consumer_names.get(grant.consumer_device_id, "?"),
+            revoked=grant.revoked_at is not None,
         )
         for grant, service, exposer_device in rows
     ]
@@ -268,9 +323,18 @@ class ConsumedGrantView:
 
 
 def exposed_grants_for_device(session: Session, device_id: str) -> list[ExposedGrantView]:
+    """Grants for services this device exposes. Excludes revoked grants and
+    grants held by a since-revoked consumer device (see revocation note in
+    common/models.py)."""
+    consumer = _aliased(Device)
     rows = session.exec(
-        select(Grant, Service).join(Service, Grant.service_id == Service.id).where(
-            Service.device_id == device_id
+        select(Grant, Service)
+        .join(Service, Grant.service_id == Service.id)
+        .join(consumer, Grant.consumer_device_id == consumer.id)
+        .where(
+            Service.device_id == device_id,
+            Grant.revoked_at.is_(None),
+            consumer.revoked_at.is_(None),
         )
     ).all()
     return [
@@ -285,11 +349,18 @@ def exposed_grants_for_device(session: Session, device_id: str) -> list[ExposedG
 
 
 def consumed_grants_for_device(session: Session, device_id: str) -> list[ConsumedGrantView]:
+    """Grants this device may consume. Excludes revoked grants and grants
+    exposed by a since-revoked device (see revocation note in
+    common/models.py)."""
     rows = session.exec(
         select(Grant, Service, Device)
         .join(Service, Grant.service_id == Service.id)
         .join(Device, Service.device_id == Device.id)
-        .where(Grant.consumer_device_id == device_id)
+        .where(
+            Grant.consumer_device_id == device_id,
+            Grant.revoked_at.is_(None),
+            Device.revoked_at.is_(None),
+        )
     ).all()
     return [
         ConsumedGrantView(

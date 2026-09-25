@@ -35,11 +35,17 @@
   .pill.ssh { background:#eef1ff; color:#3457d5; }
   .pill.tcp { background:#eaf7ef; color:#1b8a5a; }
   .pill.http { background:#fff4e6; color:#b5860b; }
+  .pill.revoked { background:#fbe4e4; color:#c23a3a; }
+  .pill.active { background:#e6f7ee; color:#1b8a5a; }
   @media (prefers-color-scheme: dark){
     .pill.ssh{ background:#232a4a; color:#9fb0ff;}
     .pill.tcp{ background:#173428; color:#7fe3ae;}
     .pill.http{ background:#3a2c11; color:#f0c675;}
+    .pill.revoked{ background:#3a1414; color:#f07171;}
+    .pill.active{ background:#123321; color:#7fe3ae;}
   }
+  button.danger { border-color:var(--danger); color:var(--danger); background:transparent; }
+  button.small { padding:4px 10px; font-size:0.8rem; font-weight:500; }
   form.inline { display:flex; gap:10px; flex-wrap:wrap; align-items:end; }
   label { display:block; font-size:0.78rem; color:var(--muted); margin-bottom:4px; }
   input, select { font:inherit; padding:7px 9px; border:1px solid var(--border); border-radius:6px;

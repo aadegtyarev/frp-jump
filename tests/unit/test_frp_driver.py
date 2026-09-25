@@ -65,6 +65,8 @@ def test_apply_writes_tls_material_and_starts_process(tmp_path) -> None:
     assert (tmp_path / "tls" / "tls.crt").read_bytes() == b"cert"
     assert (tmp_path / "tls" / "tls.key").read_bytes() == b"key"
     assert (tmp_path / "tls" / "ca.crt").read_bytes() == b"ca"
+    key_mode = (tmp_path / "tls" / "tls.key").stat().st_mode & 0o777
+    assert key_mode == 0o600
     assert (tmp_path / "frpc.toml").exists()
     assert len(supervisor.start_calls) == 1
     assert supervisor.start_calls[0][0] == "/opt/frp/frpc"

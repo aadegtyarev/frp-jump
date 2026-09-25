@@ -13,7 +13,10 @@ server and must not be conflated.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -46,7 +49,31 @@ def load(data_dir: Path) -> AgentState | None:
 
 
 def save(data_dir: Path, state: AgentState) -> None:
+    """Write state.json atomically: this file is the *only* copy of the
+    device's private key, cert, and API token, and gets rewritten on every
+    newly-seen grant -- a truncate-then-write here on power loss (an IoT
+    controller's normal failure mode) makes the device unrecoverable
+    without a physical re-enroll. Write-to-temp + fsync + rename instead.
+    """
     data_dir.mkdir(parents=True, exist_ok=True)
     path = state_path(data_dir)
-    path.write_text(json.dumps(asdict(state), indent=2))
-    path.chmod(0o600)
+    payload = json.dumps(asdict(state), indent=2).encode("utf-8")
+
+    fd, tmp_name = tempfile.mkstemp(dir=data_dir, prefix=".state-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_name, 0o600)
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp_name)
+        raise
+
+    dir_fd = os.open(data_dir, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)

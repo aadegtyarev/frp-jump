@@ -291,6 +291,37 @@ def test_non_admin_cannot_revoke_a_device(client, app_ctx) -> None:
         assert registry.get_device(db, device_id).revoked_at is None
 
 
+def test_admin_can_delete_a_device_and_reenroll_the_name(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    client.get(f"/auth/{_admin_login_link(engine)}")
+    with make_session(engine) as db:
+        admin = registry.get_or_create_user(db, "admin@example.com")
+    device_id = _enroll_device(engine, admin.id, "wb01")
+
+    resp = client.post(f"/devices/{device_id}/delete")
+    assert resp.status_code == 303
+    with make_session(engine) as db:
+        assert registry.get_device(db, device_id) is None
+
+    # name is free again
+    resp = client.post("/devices/enroll-token", data={"device_name": "wb01"})
+    assert resp.status_code == 200
+    assert "already" not in resp.text
+
+
+def test_non_admin_cannot_delete_a_device(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    with make_session(engine) as db:
+        admin = registry.get_or_create_user(db, "admin@example.com")
+    device_id = _enroll_device(engine, admin.id, "wb01")
+    friend_client = _non_admin_client(client, engine)
+
+    resp = friend_client.post(f"/devices/{device_id}/delete")
+    assert resp.status_code == 403
+    with make_session(engine) as db:
+        assert registry.get_device(db, device_id) is not None
+
+
 def test_admin_can_revoke_a_grant(client, app_ctx) -> None:
     _app, engine, _ca = app_ctx
     client.get(f"/auth/{_admin_login_link(engine)}")

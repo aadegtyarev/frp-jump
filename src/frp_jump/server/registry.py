@@ -178,6 +178,45 @@ def revoke_device(session: Session, device_id: str) -> None:
     session.commit()
 
 
+def delete_device(session: Session, device_id: str) -> None:
+    """Permanently remove a device (and its services/grants), freeing its
+    name for reuse -- e.g. the device was wiped/replaced and you want to
+    re-enroll a new one under the same name.
+
+    Unlike ``revoke_device``, this is not reversible and drops history.
+    ``create_enroll_token`` blocks a name for as long as *any* Device row
+    with it exists, revoked or not -- this is the only way to free one up.
+    """
+    device = session.get(Device, device_id)
+    if device is None:
+        raise NotFoundError(f"no such device {device_id!r}")
+
+    # No SQLModel `Relationship()`s are declared between these tables (kept
+    # deliberately flat/simple), so SQLAlchemy's unit-of-work has no FK
+    # graph to auto-order these deletes by -- without explicit flushes
+    # between stages it can (and did, see the test that caught this) try to
+    # delete a row before what still references it, and SQLite's now-
+    # enforced FOREIGN KEY constraint (server/db.py) rejects that.
+    owned_service_ids = [
+        s.id for s in session.exec(select(Service).where(Service.device_id == device_id))
+    ]
+    if owned_service_ids:
+        for grant in session.exec(
+            select(Grant).where(Grant.service_id.in_(owned_service_ids))
+        ):
+            session.delete(grant)
+    for grant in session.exec(select(Grant).where(Grant.consumer_device_id == device_id)):
+        session.delete(grant)
+    session.flush()
+
+    for service in session.exec(select(Service).where(Service.device_id == device_id)):
+        session.delete(service)
+    session.flush()
+
+    session.delete(device)
+    session.commit()
+
+
 def record_heartbeat(session: Session, device: Device, *, agent_version: str | None = None) -> None:
     device.last_seen_at = _now()
     if agent_version is not None:

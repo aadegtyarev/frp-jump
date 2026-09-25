@@ -238,6 +238,23 @@ def revoke_device(
     return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@router.post("/devices/{device_id}/delete", response_class=HTMLResponse)
+def delete_device(
+    device_id: str,
+    request: Request,
+    db: Annotated[DbSession, Depends(get_db)],
+    user: Annotated[User, Depends(require_admin)],
+):
+    """Permanently removes the device and its services/grants, freeing its
+    name for a new enroll token -- e.g. it was wiped/replaced. Not
+    reversible; unlike revoke, this drops history."""
+    try:
+        registry.delete_device(db, device_id)
+    except registry.NotFoundError as exc:
+        return _page(request, "result.html", title="Delete device", error=str(exc))
+    return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+
+
 @router.post("/grants/{grant_id}/revoke", response_class=HTMLResponse)
 def revoke_grant(
     grant_id: str,

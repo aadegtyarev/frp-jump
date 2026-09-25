@@ -331,6 +331,76 @@ def test_get_device_by_api_token_returns_none_for_a_revoked_device(db_session) -
     assert registry.get_device_by_api_token(db_session, enrolled.api_token) is None
 
 
+def test_delete_device_rejects_unknown_id(db_session) -> None:
+    with pytest.raises(registry.NotFoundError):
+        registry.delete_device(db_session, "no-such-device")
+
+
+def test_delete_device_frees_the_name_for_a_new_enrollment(db_session) -> None:
+    admin = _make_admin(db_session)
+    enrolled = _enroll(db_session, admin, "wb01")
+
+    # even revoked, the name stays blocked until actually deleted
+    registry.revoke_device(db_session, enrolled.device.id)
+    with pytest.raises(registry.ConflictError):
+        registry.create_enroll_token(
+            db_session, device_name_hint="wb01", created_by=admin.id, ttl=_TTL
+        )
+
+    registry.delete_device(db_session, enrolled.device.id)
+    assert registry.get_device(db_session, enrolled.device.id) is None
+
+    reissued = _enroll(db_session, admin, "wb01")
+    assert reissued.device.name == "wb01"
+    assert reissued.device.id != enrolled.device.id
+
+
+def test_delete_device_cascades_to_its_own_services_and_grants(db_session) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    consumer = _enroll(db_session, admin, "laptop")
+    service = registry.create_service(
+        db_session,
+        device_id=exposer.device.id,
+        name="wb01-ssh",
+        protocol=ServiceProtocol.SSH,
+        target_port=22,
+    )
+    grant = registry.create_grant(
+        db_session, service_id=service.id, consumer_device_id=consumer.device.id
+    )
+
+    registry.delete_device(db_session, exposer.device.id)
+
+    assert registry.get_device(db_session, exposer.device.id) is None
+    assert registry.list_services_view(db_session) == []
+    assert db_session.get(type(grant), grant.id) is None
+
+
+def test_delete_device_cascades_to_grants_it_consumed(db_session) -> None:
+    admin = _make_admin(db_session)
+    exposer = _enroll(db_session, admin, "wb01")
+    consumer = _enroll(db_session, admin, "laptop")
+    service = registry.create_service(
+        db_session,
+        device_id=exposer.device.id,
+        name="wb01-ssh",
+        protocol=ServiceProtocol.SSH,
+        target_port=22,
+    )
+    grant = registry.create_grant(
+        db_session, service_id=service.id, consumer_device_id=consumer.device.id
+    )
+
+    registry.delete_device(db_session, consumer.device.id)
+
+    assert registry.get_device(db_session, consumer.device.id) is None
+    # the exposer's service survives -- only the grant tying it to the
+    # now-deleted consumer is gone
+    assert len(registry.list_services_view(db_session)) == 1
+    assert db_session.get(type(grant), grant.id) is None
+
+
 def test_revoke_grant_marks_it_revoked_in_list_grants_view(db_session) -> None:
     admin = _make_admin(db_session)
     exposer = _enroll(db_session, admin, "wb01")

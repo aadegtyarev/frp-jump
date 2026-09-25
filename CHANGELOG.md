@@ -6,6 +6,16 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+### Added
+
+- `packaging/scripts/frp-jump-login-link`: wrapper around
+  `server login-link` for a systemd deployment, so minting a fresh
+  login/invite link doesn't require hand-assembling the
+  `EnvironmentFile` incantation every time
+- README: an explicit "Installing the CLI" section (git clone + venv;
+  this isn't published to PyPI), and pointers to where the enroll token
+  and login links actually come from
+
 ## [0.1.0] - 2026-09-25
 
 First working version: server, device agent, and WebUI, verified end to

@@ -26,6 +26,32 @@ relayed through your server.
 - **UX goal**: after setup, `ssh <name>` and `http://127.0.0.1:<port>` just
   work with stock clients, whether the path underneath is p2p or relayed.
 
+## Installing the CLI
+
+Not published anywhere (PyPI, etc.) — install by cloning this repo, on
+**every** machine that will run either `frp-jump server ...` or
+`frp-jump client ...` (the server box, and each device you connect):
+
+```sh
+git clone <this-repo-url>
+cd frp-jump
+python3 -m venv .venv          # needs the venv module: on some distros
+                                # that's a separate package, e.g. Debian/
+                                # Ubuntu `apt install python3-venv`
+.venv/bin/pip install -e .
+.venv/bin/frp-jump --help
+```
+
+(`uv sync` works too if you have [uv](https://docs.astral.sh/uv/) —
+either way you end up with `frp-jump` in that venv.) If the repo is
+private, whatever machine clones it needs read access — your own
+laptop/account SSH key usually already has it; a server or CI box that
+shouldn't have your personal key gets its own **read-only deploy key**
+added to the repo instead (`gh repo deploy-key add`).
+
+Put `.venv/bin` on `PATH`, or just call `.venv/bin/frp-jump` directly —
+the rest of this README says `frp-jump` for brevity.
+
 ## Quick start
 
 On the **server** (a box with a public IP/domain):
@@ -37,12 +63,29 @@ frp-jump server init --admin-email you@example.com
 frp-jump server run
 ```
 
-In the WebUI: **Add device** for each box you want to connect (prints a
-one-time `frp-jump client enroll <url> <token>` command), then define a
+Lost that link, or need to sign in from somewhere else? It's not your
+only way in — mint a fresh one any time:
+
+```sh
+frp-jump server login-link you@example.com             # new login link
+frp-jump server login-link friend@example.com --invite # invite someone else
+```
+
+(Under the systemd deployment below, `server login-link` needs the same
+`FRP_JUMP_*` env vars as `server run`, which it won't pick up on its own
+outside of systemd's `EnvironmentFile` — see
+[`packaging/scripts/frp-jump-login-link`](packaging/scripts/frp-jump-login-link)
+for a copy-pasteable wrapper.)
+
+In the WebUI: **Add device** for each box you want to connect — this is
+also where the enroll token comes from, there's no other source for it.
+It prints a one-time `frp-jump client enroll <url> <token>` command; run
+that *on the device itself* (not on the server). Then define a
 **service** on the exposing device (e.g. `wb01-ssh`, protocol `ssh`, local
 port `22`) and a **grant** wiring a consuming device to it.
 
-On **each device**:
+On **each device** (after [installing the CLI](#installing-the-cli) there
+too):
 
 ```sh
 frp-jump client enroll https://tunnel.example.com <token-from-webui>
@@ -80,6 +123,14 @@ agent running as the actual human (so it can maintain their real
 `FRP_JUMP_SSH_CONFIG_PATH` at that user's config explicitly. A
 device that only *exposes* services (e.g. a Wiren Board controller) is
 fine as a system service.
+
+On the server, also install
+[`packaging/scripts/frp-jump-login-link`](packaging/scripts/frp-jump-login-link)
+to `/usr/local/bin/` (`chmod 755`, `root:root`) — a one-line wrapper
+around `server login-link` that loads the systemd unit's env file for
+you, so minting a fresh login/invite link doesn't mean hand-assembling
+`env $(sudo cat /etc/frp-jump/server.env | xargs) sudo -u frp-jump ...`
+every time.
 
 ## Development
 

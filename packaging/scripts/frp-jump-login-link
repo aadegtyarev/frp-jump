@@ -1,0 +1,23 @@
+#!/bin/bash
+# Mint a fresh frp-jump login/invite link without hand-assembling the
+# `env $(sudo cat /etc/frp-jump/server.env | xargs) ...` incantation every
+# time -- `frp-jump server login-link` needs the same FRP_JUMP_* env vars
+# as `server run`, but running it directly doesn't go through systemd's
+# EnvironmentFile, so it doesn't pick them up on its own.
+#
+# Assumes the systemd deployment layout from the README (data/venv under
+# /opt/frp-jump, config at /etc/frp-jump/server.env, service user
+# `frp-jump`) -- adjust the paths below if you deployed differently.
+#
+# Install: copy to /usr/local/bin/frp-jump-login-link, chmod 755, root:root.
+#
+# Usage:
+#   frp-jump-login-link you@example.com             # login link (short TTL)
+#   frp-jump-login-link friend@example.com --invite  # invite link (longer TTL)
+set -euo pipefail
+if [ -z "${1:-}" ]; then
+    echo "usage: frp-jump-login-link <email> [--invite]" >&2
+    exit 1
+fi
+sudo -u frp-jump env $(sudo cat /etc/frp-jump/server.env | xargs) \
+    /opt/frp-jump/.venv/bin/frp-jump server login-link "$@"

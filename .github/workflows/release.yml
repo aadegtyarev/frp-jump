@@ -11,8 +11,24 @@ permissions:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write  # required for PyPI Trusted Publishing (OIDC) -- no stored token
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check tag matches pyproject.toml version
+        # $GITHUB_REF_NAME is a runner-provided env var (this push's own tag
+        # name) -- not `${{ github.ref_name }}` string-interpolated into the
+        # script, which is the safe pattern here.
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PYPROJECT_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$TAG_VERSION" != "$PYPROJECT_VERSION" ]; then
+            echo "::error::Tag v$TAG_VERSION does not match pyproject.toml version $PYPROJECT_VERSION -- bump pyproject.toml first"
+            exit 1
+          fi
+          echo "OK: tag matches pyproject.toml version $PYPROJECT_VERSION"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
@@ -29,3 +45,8 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
           generate_release_notes: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

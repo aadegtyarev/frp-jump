@@ -6,6 +6,18 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-25
+
+### Added
+
+- Device **Delete** (hard, cascades to services/grants, frees the name for
+  reuse) alongside the existing **Revoke** (soft, keeps history) — a
+  wiped/replaced device can now be re-enrolled under its old name
+- CI: the release workflow now also publishes to PyPI (Trusted Publishing
+  / OIDC, no stored token) alongside the existing GitHub Release, and
+  checks the pushed tag matches `pyproject.toml`'s version before
+  building anything
+
 ## [0.1.0] - 2026-09-25
 
 First working version: server, device agent, and WebUI, verified end to

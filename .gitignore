@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# runtime state (certs, DB, frp configs) — never commit secrets/keys
+/var/
+*.db
+*.pem
+*.crt
+*.key
+!packaging/**/*.crt.example

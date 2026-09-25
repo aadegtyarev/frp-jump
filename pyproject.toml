@@ -1,0 +1,50 @@
+[project]
+name = "frp-jump"
+version = "0.1.0"
+description = "P2P-with-relay-fallback ssh/http/tcp tunnels between Linux boxes, built on frp"
+readme = "README.md"
+authors = [
+    { name = "Alexander Degtyarev", email = "a.degtyarev@struhe.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.15",
+    "rich>=13.9",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.17",
+    "sqlmodel>=0.0.22",
+    "cryptography>=43.0",
+    "tomli-w>=1.1",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+frp-jump = "frp_jump.cli.main:app"
+
+[build-system]
+requires = ["uv_build>=0.11.14,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: downloads/spins up real frp binaries and hits the network; excluded by default",
+]
+addopts = ["-m", "not integration"]
+asyncio_mode = "auto"

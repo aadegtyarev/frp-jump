@@ -3,6 +3,8 @@ name = "frp-jump"
 version = "0.1.0"
 description = "P2P-with-relay-fallback ssh/http/tcp tunnels between Linux boxes, built on frp"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Alexander Degtyarev", email = "a.degtyarev@struhe.com" }
 ]

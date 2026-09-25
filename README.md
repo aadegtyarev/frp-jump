@@ -109,3 +109,12 @@ src/frp_jump/
               management
   cli/        `frp-jump server ...` / `frp-jump client ...`
 ```
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). Changes are tracked in
+[`CHANGELOG.md`](CHANGELOG.md).
+
+## License
+
+[MIT](LICENSE)

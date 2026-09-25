@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     frps_admin_port: int = 7500
     xtcp_fallback_timeout_ms: int = 1500
 
+    # agent
+    agent_poll_interval_seconds: float = 30.0
+    # Where to maintain the `Include` line + managed Host blocks for consumed
+    # SSH grants. Defaults to the invoking user's own ~/.ssh/config -- override
+    # when running as a dedicated service account that isn't the human's login.
+    ssh_config_path: Path | None = None
+
     # token / session lifetimes
     enroll_token_ttl_hours: int = 24
     login_token_ttl_minutes: int = 60

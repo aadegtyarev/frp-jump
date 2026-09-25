@@ -115,13 +115,15 @@ def create_enroll_token(
     except registry.ConflictError as exc:
         return _page(request, "result.html", title="Add device", error=str(exc))
 
-    server_url = settings.public_base_url or settings.relay_public_addr or "<this-server>"
-    command = f"frp-jump client enroll {server_url} {issued.token} --name {device_name}"
+    control_url = settings.public_base_url or (
+        f"http://{settings.relay_public_addr}:{settings.webui_port}"
+    )
+    command = f"frp-jump client enroll {control_url} {issued.token}"
     return _page(
         request,
         "result.html",
         title="Add device",
-        label="Run this on the new device (shown once)",
+        label=f"Run this on {device_name} to enroll it (shown once)",
         value=command,
     )
 

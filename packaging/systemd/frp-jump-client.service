@@ -1,0 +1,31 @@
+[Unit]
+Description=frp-jump client agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/frp-jump/client.env
+ExecStart=/usr/local/bin/frp-jump client run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
+# NOTE: whether to install this as a system unit (above) or a --user unit
+# depends on what this device does:
+#
+# - Exposer-only (e.g. a Wiren Board controller offering its own SSH/HTTP,
+#   consuming nothing): a system service is fine, ssh_config management is
+#   a no-op here.
+#
+# - Any device that CONSUMES an ssh grant (e.g. your laptop wanting
+#   `ssh wb01` to work): install this as a user unit instead, so the agent
+#   runs as you and can maintain your own ~/.ssh/config:
+#     mkdir -p ~/.config/systemd/user
+#     cp frp-jump-client.service ~/.config/systemd/user/
+#     # remove the User=/Group=/EnvironmentFile= system-path assumptions above
+#     systemctl --user enable --now frp-jump-client
+#   Alternatively, keep it a system service but set FRP_JUMP_SSH_CONFIG_PATH
+#   explicitly to that user's ~/.ssh/config.

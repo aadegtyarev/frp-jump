@@ -23,5 +23,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          # explicit, not `dist/*` -- `uv build` also drops a `dist/.gitignore`
+          # (to keep the output dir out of git) that a broad glob picks up too
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
           generate_release_notes: true

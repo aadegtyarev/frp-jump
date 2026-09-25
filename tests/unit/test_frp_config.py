@@ -19,7 +19,7 @@ def _desired(**overrides) -> DesiredState:
 
 def test_frpc_config_has_no_proxies_or_visitors_when_nothing_wired() -> None:
     config = build_frpc_config(
-        _desired(), cert_file="c.crt", key_file="c.key", ca_file="ca.crt"
+        _desired(), cert_file="c.crt", key_file="c.key", ca_file="ca.crt", fallback_timeout_ms=1500
     )
     assert "proxies" not in config
     assert "visitors" not in config
@@ -34,7 +34,9 @@ def test_frpc_config_has_no_proxies_or_visitors_when_nothing_wired() -> None:
 
 def test_frpc_config_exposes_paired_xtcp_and_stcp_proxies() -> None:
     desired = _desired(exposed=(ExposedService(grant_id="g1", secret="topsecret", local_port=22),))
-    config = build_frpc_config(desired, cert_file="c.crt", key_file="c.key", ca_file="ca.crt")
+    config = build_frpc_config(
+        desired, cert_file="c.crt", key_file="c.key", ca_file="ca.crt", fallback_timeout_ms=1500
+    )
 
     proxies = {p["name"]: p for p in config["proxies"]}
     assert set(proxies) == {"g1-xtcp", "g1-stcp"}
@@ -51,7 +53,9 @@ def test_frpc_config_wires_xtcp_visitor_fallback_to_stcp_visitor() -> None:
     desired = _desired(
         consumed=(ConsumedGrant(grant_id="g2", secret="s2", local_bind_port=2222),)
     )
-    config = build_frpc_config(desired, cert_file="c.crt", key_file="c.key", ca_file="ca.crt")
+    config = build_frpc_config(
+        desired, cert_file="c.crt", key_file="c.key", ca_file="ca.crt", fallback_timeout_ms=750
+    )
 
     visitors = {v["name"]: v for v in config["visitors"]}
     assert set(visitors) == {"g2-stcp-visitor", "g2-xtcp-visitor"}
@@ -69,7 +73,7 @@ def test_frpc_config_wires_xtcp_visitor_fallback_to_stcp_visitor() -> None:
     assert xtcp_visitor["bindAddr"] == "127.0.0.1"
     assert xtcp_visitor["bindPort"] == 2222
     assert xtcp_visitor["fallbackTo"] == "g2-stcp-visitor"
-    assert xtcp_visitor["fallbackTimeoutMs"] > 0
+    assert xtcp_visitor["fallbackTimeoutMs"] == 750
 
 
 def test_frps_config_forces_tls_and_sets_bind_port() -> None:
@@ -82,7 +86,9 @@ def test_frps_config_forces_tls_and_sets_bind_port() -> None:
 
 def test_write_toml_round_trips_through_tomllib(tmp_path) -> None:
     desired = _desired(exposed=(ExposedService(grant_id="g1", secret="s", local_port=80),))
-    config = build_frpc_config(desired, cert_file="c.crt", key_file="c.key", ca_file="ca.crt")
+    config = build_frpc_config(
+        desired, cert_file="c.crt", key_file="c.key", ca_file="ca.crt", fallback_timeout_ms=1500
+    )
     path = tmp_path / "frpc.toml"
     write_toml(config, path)
     loaded = tomllib.loads(path.read_text())

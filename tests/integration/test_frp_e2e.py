@@ -79,12 +79,18 @@ def test_grant_proxies_traffic_from_consumer_to_exposer(tmp_path, frp_binaries) 
     )
 
     exposer = FrpDriver(
-        binary=frp_binaries.frpc, state_dir=tmp_path / "exposer", admin_port=_free_port()
+        binary=frp_binaries.frpc,
+        state_dir=tmp_path / "exposer",
+        admin_port=_free_port(),
+        fallback_timeout_ms=1500,
     )
     exposer_pair = ca.issue("exposer")
 
     consumer = FrpDriver(
-        binary=frp_binaries.frpc, state_dir=tmp_path / "consumer", admin_port=_free_port()
+        binary=frp_binaries.frpc,
+        state_dir=tmp_path / "consumer",
+        admin_port=_free_port(),
+        fallback_timeout_ms=1500,
     )
     consumer_pair = ca.issue("consumer")
 

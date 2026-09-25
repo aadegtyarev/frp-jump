@@ -29,8 +29,6 @@ from frp_jump.driver.base import (
 from frp_jump.driver.frp.config import build_frpc_config, build_frps_config
 from frp_jump.driver.frp.process import ProcessSupervisor, SubprocessSupervisor
 
-_DEFAULT_ADMIN_PORT = 7400
-
 
 def _fingerprint(config: dict) -> str:
     return hashlib.sha256(tomli_w.dumps(config).encode("utf-8")).hexdigest()
@@ -57,19 +55,27 @@ class FrpDriver:
         *,
         binary: Path,
         state_dir: Path,
-        admin_port: int = _DEFAULT_ADMIN_PORT,
+        admin_port: int,
+        fallback_timeout_ms: int,
         supervisor: ProcessSupervisor | None = None,
     ) -> None:
         self._binary = binary
         self._config_path = state_dir / "frpc.toml"
         self._tls_dir = state_dir / "tls"
         self._admin_port = admin_port
+        self._fallback_timeout_ms = fallback_timeout_ms
         self._supervisor = supervisor or SubprocessSupervisor()
         self._fingerprint: str | None = None
 
     def apply(self, desired: DesiredState) -> None:
         cert_file, key_file, ca_file = _write_tls_files(self._tls_dir, desired)
-        config = build_frpc_config(desired, cert_file=cert_file, key_file=key_file, ca_file=ca_file)
+        config = build_frpc_config(
+            desired,
+            cert_file=cert_file,
+            key_file=key_file,
+            ca_file=ca_file,
+            fallback_timeout_ms=self._fallback_timeout_ms,
+        )
         config["webServer"] = {"addr": "127.0.0.1", "port": self._admin_port}
 
         fingerprint = _fingerprint(config)
@@ -97,7 +103,7 @@ class FrpsRelayDriver:
         *,
         binary: Path,
         state_dir: Path,
-        admin_port: int = _DEFAULT_ADMIN_PORT,
+        admin_port: int,
         supervisor: ProcessSupervisor | None = None,
     ) -> None:
         self._binary = binary

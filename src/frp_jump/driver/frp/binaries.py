@@ -21,7 +21,6 @@ from pathlib import Path
 
 import httpx
 
-FRP_VERSION = "0.70.0"
 _CHECKSUMS_ASSET = "frp_sha256_checksums.txt"
 
 
@@ -54,11 +53,11 @@ def frp_arch(machine: str | None = None) -> str:
     raise UnsupportedArchitecture(f"no frp release known for machine {machine!r}")
 
 
-def asset_name(arch: str, *, version: str = FRP_VERSION) -> str:
+def asset_name(arch: str, *, version: str) -> str:
     return f"frp_{version}_linux_{arch}.tar.gz"
 
 
-def release_url(version: str = FRP_VERSION) -> str:
+def release_url(version: str) -> str:
     return f"https://github.com/fatedier/frp/releases/download/v{version}"
 
 
@@ -89,7 +88,7 @@ def sha256_of(path: Path) -> str:
 def ensure_installed(
     install_dir: Path,
     *,
-    version: str = FRP_VERSION,
+    version: str,
     machine: str | None = None,
     client: httpx.Client | None = None,
 ) -> FrpBinaries:

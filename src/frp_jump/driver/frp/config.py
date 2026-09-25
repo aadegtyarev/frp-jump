@@ -18,8 +18,6 @@ import tomli_w
 
 from frp_jump.driver.base import DesiredState, RelayState
 
-_FALLBACK_TIMEOUT_MS = 1500
-
 
 def _xtcp_proxy_name(grant_id: str) -> str:
     return f"{grant_id}-xtcp"
@@ -51,6 +49,7 @@ def build_frpc_config(
     cert_file: str,
     key_file: str,
     ca_file: str,
+    fallback_timeout_ms: int,
 ) -> dict:
     """Build the frpc config dict for one device's desired state."""
     proxies: list[dict] = []
@@ -97,7 +96,7 @@ def build_frpc_config(
                 "bindAddr": "127.0.0.1",
                 "bindPort": consumed.local_bind_port,
                 "fallbackTo": stcp_name,
-                "fallbackTimeoutMs": _FALLBACK_TIMEOUT_MS,
+                "fallbackTimeoutMs": fallback_timeout_ms,
             }
         )
 

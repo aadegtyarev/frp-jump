@@ -3,6 +3,9 @@ from pathlib import Path
 from frp_jump.driver.base import ConsumedGrant, DesiredState, DriverStatus, RelayState
 from frp_jump.driver.frp.driver import FrpDriver, FrpsRelayDriver
 
+_ADMIN_PORT = 17400
+_FALLBACK_TIMEOUT_MS = 1500
+
 
 class FakeSupervisor:
     def __init__(self) -> None:
@@ -22,6 +25,25 @@ class FakeSupervisor:
         return self._running
 
 
+def _make_driver(tmp_path, supervisor: FakeSupervisor) -> FrpDriver:
+    return FrpDriver(
+        binary=Path("/opt/frp/frpc"),
+        state_dir=tmp_path,
+        admin_port=_ADMIN_PORT,
+        fallback_timeout_ms=_FALLBACK_TIMEOUT_MS,
+        supervisor=supervisor,
+    )
+
+
+def _make_relay_driver(tmp_path, supervisor: FakeSupervisor) -> FrpsRelayDriver:
+    return FrpsRelayDriver(
+        binary=Path("/opt/frp/frps"),
+        state_dir=tmp_path,
+        admin_port=_ADMIN_PORT,
+        supervisor=supervisor,
+    )
+
+
 def _desired(**overrides) -> DesiredState:
     base = dict(
         device_id="dev-1",
@@ -37,9 +59,7 @@ def _desired(**overrides) -> DesiredState:
 
 def test_apply_writes_tls_material_and_starts_process(tmp_path) -> None:
     supervisor = FakeSupervisor()
-    driver = FrpDriver(
-        binary=Path("/opt/frp/frpc"), state_dir=tmp_path, supervisor=supervisor
-    )
+    driver = _make_driver(tmp_path, supervisor)
     driver.apply(_desired())
 
     assert (tmp_path / "tls" / "tls.crt").read_bytes() == b"cert"
@@ -52,7 +72,7 @@ def test_apply_writes_tls_material_and_starts_process(tmp_path) -> None:
 
 def test_apply_is_idempotent_when_desired_state_is_unchanged(tmp_path) -> None:
     supervisor = FakeSupervisor()
-    driver = FrpDriver(binary=Path("/opt/frp/frpc"), state_dir=tmp_path, supervisor=supervisor)
+    driver = _make_driver(tmp_path, supervisor)
     desired = _desired()
     driver.apply(desired)
     driver.apply(desired)
@@ -61,7 +81,7 @@ def test_apply_is_idempotent_when_desired_state_is_unchanged(tmp_path) -> None:
 
 def test_apply_restarts_when_desired_state_changes(tmp_path) -> None:
     supervisor = FakeSupervisor()
-    driver = FrpDriver(binary=Path("/opt/frp/frpc"), state_dir=tmp_path, supervisor=supervisor)
+    driver = _make_driver(tmp_path, supervisor)
     driver.apply(_desired())
     driver.apply(
         _desired(consumed=(ConsumedGrant(grant_id="g1", secret="s", local_bind_port=2222),))
@@ -71,7 +91,7 @@ def test_apply_restarts_when_desired_state_changes(tmp_path) -> None:
 
 def test_apply_restarts_if_process_died_even_with_same_config(tmp_path) -> None:
     supervisor = FakeSupervisor()
-    driver = FrpDriver(binary=Path("/opt/frp/frpc"), state_dir=tmp_path, supervisor=supervisor)
+    driver = _make_driver(tmp_path, supervisor)
     desired = _desired()
     driver.apply(desired)
     supervisor._running = False  # simulate crash
@@ -81,7 +101,7 @@ def test_apply_restarts_if_process_died_even_with_same_config(tmp_path) -> None:
 
 def test_status_reflects_supervisor(tmp_path) -> None:
     supervisor = FakeSupervisor()
-    driver = FrpDriver(binary=Path("/opt/frp/frpc"), state_dir=tmp_path, supervisor=supervisor)
+    driver = _make_driver(tmp_path, supervisor)
     assert driver.status() == DriverStatus(running=False)
     driver.apply(_desired())
     assert driver.status() == DriverStatus(running=True)
@@ -89,7 +109,7 @@ def test_status_reflects_supervisor(tmp_path) -> None:
 
 def test_stop_stops_supervisor_and_forces_next_apply_to_restart(tmp_path) -> None:
     supervisor = FakeSupervisor()
-    driver = FrpDriver(binary=Path("/opt/frp/frpc"), state_dir=tmp_path, supervisor=supervisor)
+    driver = _make_driver(tmp_path, supervisor)
     desired = _desired()
     driver.apply(desired)
     driver.stop()
@@ -97,11 +117,24 @@ def test_stop_stops_supervisor_and_forces_next_apply_to_restart(tmp_path) -> Non
     assert driver.status().running is False
 
 
+def test_apply_uses_configured_fallback_timeout(tmp_path) -> None:
+    supervisor = FakeSupervisor()
+    driver = FrpDriver(
+        binary=Path("/opt/frp/frpc"),
+        state_dir=tmp_path,
+        admin_port=_ADMIN_PORT,
+        fallback_timeout_ms=750,
+        supervisor=supervisor,
+    )
+    consumed = (ConsumedGrant(grant_id="g1", secret="s", local_bind_port=2222),)
+    driver.apply(_desired(consumed=consumed))
+    config_text = (tmp_path / "frpc.toml").read_text()
+    assert "fallbackTimeoutMs = 750" in config_text
+
+
 def test_relay_driver_writes_tls_material_and_forces_tls(tmp_path) -> None:
     supervisor = FakeSupervisor()
-    driver = FrpsRelayDriver(
-        binary=Path("/opt/frp/frps"), state_dir=tmp_path, supervisor=supervisor
-    )
+    driver = _make_relay_driver(tmp_path, supervisor)
     relay = RelayState(bind_port=7000, ca_cert_pem=b"ca", cert_pem=b"cert", key_pem=b"key")
     driver.apply(relay)
 
@@ -113,9 +146,7 @@ def test_relay_driver_writes_tls_material_and_forces_tls(tmp_path) -> None:
 
 def test_relay_driver_status_and_stop(tmp_path) -> None:
     supervisor = FakeSupervisor()
-    driver = FrpsRelayDriver(
-        binary=Path("/opt/frp/frps"), state_dir=tmp_path, supervisor=supervisor
-    )
+    driver = _make_relay_driver(tmp_path, supervisor)
     relay = RelayState(bind_port=7000, ca_cert_pem=b"ca", cert_pem=b"cert", key_pem=b"key")
     driver.apply(relay)
     assert driver.status().running is True

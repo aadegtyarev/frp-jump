@@ -24,7 +24,8 @@ from frp_jump.driver.frp.binaries import ensure_installed
 from frp_jump.driver.frp.driver import FrpDriver
 
 app = typer.Typer(
-    help="Enroll this device, run its tunnel agent, and manage your own devices/connections."
+    help="Enroll this device, run its tunnel agent, and manage your own devices/connections.",
+    no_args_is_help=True,
 )
 console = Console()
 
@@ -813,7 +814,8 @@ def disconnect_cmd(
 
 
 devices_app = typer.Typer(
-    help="Manage your own devices -- list, add via token, delete, disable/enable."
+    help="Manage your own devices -- list, add via token, delete, disable/enable.",
+    no_args_is_help=True,
 )
 app.add_typer(devices_app, name="devices")
 
@@ -958,7 +960,8 @@ def devices_enable_cmd(
 
 profiles_app = typer.Typer(
     help="Manage saved connection profiles -- local DEVICE:PORT shortcuts "
-    "created by `connect`. Purely client-side, never sent to the server."
+    "created by `connect`. Purely client-side, never sent to the server.",
+    no_args_is_help=True,
 )
 app.add_typer(profiles_app, name="profiles")
 

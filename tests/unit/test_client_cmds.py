@@ -726,3 +726,25 @@ def test_version_flag_prints_the_installed_version_and_exits():
 
     assert result.exit_code == 0, result.output
     assert result.output.strip() == client_cmds._AGENT_VERSION
+
+
+def test_bare_invocation_shows_help_instead_of_missing_command_error():
+    """Click's own convention: `no_args_is_help` still exits non-zero (a
+    UsageError, exit code 2) -- the point is that the full rich help text,
+    including every subcommand, now shows instead of a bare "Missing
+    command" one-liner with no further guidance."""
+    result = runner.invoke(client_cmds.app, [])
+
+    assert result.exit_code == 2
+    assert "Missing command" not in result.output
+    assert "enroll" in result.output
+    assert "devices" in result.output
+
+
+def test_bare_subcommand_group_shows_help_instead_of_missing_command_error():
+    result = runner.invoke(client_cmds.app, ["devices"])
+
+    assert result.exit_code == 2
+    assert "Missing command" not in result.output
+    assert "list" in result.output
+    assert "add-token" in result.output

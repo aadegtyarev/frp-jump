@@ -6,6 +6,18 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-09-26
+
+### Changed
+
+- **Every CLI command group now shows full help when invoked with no
+  arguments**, instead of a bare "Missing command" error -- both
+  top-level commands (`frp-jump-client`, `frp-jump-server`) and every
+  subcommand group (`devices`, `profiles`, `users`, `enroll-tokens`).
+  Still exits non-zero (Click's own convention for this), but you now
+  see every available subcommand instead of being told to go run
+  `--help` yourself.
+
 ## [0.3.7] - 2026-09-26
 
 ### Added

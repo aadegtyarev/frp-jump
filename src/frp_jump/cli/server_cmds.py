@@ -50,7 +50,9 @@ except ModuleNotFoundError as exc:
     )
     sys.exit(1)
 
-app = typer.Typer(help="Run and manage the frp-jump server (control-plane + relay).")
+app = typer.Typer(
+    help="Run and manage the frp-jump server (control-plane + relay).", no_args_is_help=True
+)
 console = Console()
 
 try:
@@ -320,7 +322,10 @@ def install_service(
 
 # --- users ------------------------------------------------------------
 
-users_app = typer.Typer(help="Manage registered users (people identified by an SSH public key).")
+users_app = typer.Typer(
+    help="Manage registered users (people identified by an SSH public key).",
+    no_args_is_help=True,
+)
 app.add_typer(users_app, name="users")
 
 
@@ -455,7 +460,7 @@ def users_delete(
 
 # --- devices ------------------------------------------------------------
 
-devices_app = typer.Typer(help="Manage devices across all users.")
+devices_app = typer.Typer(help="Manage devices across all users.", no_args_is_help=True)
 app.add_typer(devices_app, name="devices")
 
 
@@ -563,7 +568,9 @@ def devices_enable(
 
 # --- enroll-tokens --------------------------------------------------------
 
-enroll_tokens_app = typer.Typer(help="Issue and manage one-time device enroll tokens.")
+enroll_tokens_app = typer.Typer(
+    help="Issue and manage one-time device enroll tokens.", no_args_is_help=True
+)
 app.add_typer(enroll_tokens_app, name="enroll-tokens")
 
 

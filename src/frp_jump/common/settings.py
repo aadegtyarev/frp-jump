@@ -73,6 +73,13 @@ class Settings(BaseSettings):
     # SSH grants. Defaults to the invoking user's own ~/.ssh/config -- override
     # when running as a dedicated service account that isn't the human's login.
     ssh_config_path: Path | None = None
+    # `devices list` (both CLIs) shows a device as "online" when its
+    # last heartbeat is within this many seconds -- a generous multiple of
+    # the default poll interval (2s) to absorb normal jitter/a slow network,
+    # not a tight liveness check. A device using a much longer
+    # `--poll-interval` should have this raised to match, or every one of
+    # its cycles will show as offline right up until the next heartbeat.
+    device_online_threshold_seconds: float = 30.0
 
     # token lifetimes
     enroll_token_ttl_hours: int = 24

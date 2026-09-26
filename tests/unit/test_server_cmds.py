@@ -1,11 +1,30 @@
+import contextlib
+import datetime
+import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from frp_jump.cli import server_cmds
+from frp_jump.server import registry
 
 runner = CliRunner()
+
+_TTL = datetime.timedelta(hours=24)
+
+
+def _make_user(db_session):
+    with tempfile.TemporaryDirectory() as tmp:
+        key_path = Path(tmp) / "id"
+        subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(key_path)],
+            check=True,
+            capture_output=True,
+        )
+        public_key = key_path.with_suffix(".pub").read_text()
+    return registry.create_user(db_session, public_key=public_key, label="alice")
 
 
 @pytest.mark.parametrize(
@@ -118,3 +137,33 @@ def test_bare_subcommand_group_shows_help_instead_of_missing_command_error():
     assert "Missing command" not in result.output
     assert "add-key" in result.output
     assert "list" in result.output
+
+
+def test_devices_list_shows_online_and_offline(db_session, monkeypatch):
+    admin = _make_user(db_session)
+    issued_online = registry.create_enroll_token(
+        db_session, device_name_hint="wb01", created_by=admin.id, ttl=_TTL
+    )
+    online = registry.redeem_enroll_token(db_session, issued_online.token, cert_serial="1")
+    issued_offline = registry.create_enroll_token(
+        db_session, device_name_hint="old", created_by=admin.id, ttl=_TTL
+    )
+    offline = registry.redeem_enroll_token(db_session, issued_offline.token, cert_serial="2")
+
+    online_row = registry.get_device(db_session, online.device.id)
+    online_row.last_seen_at = datetime.datetime.now(datetime.UTC)
+    offline_row = registry.get_device(db_session, offline.device.id)
+    offline_row.last_seen_at = datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=1)
+    db_session.add(online_row)
+    db_session.add(offline_row)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        server_cmds, "_open_db", lambda settings: contextlib.nullcontext(db_session)
+    )
+
+    result = runner.invoke(server_cmds.app, ["devices", "list"])
+
+    assert result.exit_code == 0, result.output
+    assert "online" in result.output
+    assert "offline" in result.output

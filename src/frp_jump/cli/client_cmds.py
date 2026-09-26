@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -862,6 +863,19 @@ def devices_add_token_cmd(
     console.print(f"[bold]{command}[/bold]")
 
 
+def _is_recent(last_seen_at: str | None, *, threshold_seconds: float) -> bool:
+    """Whether an ISO `last_seen_at` timestamp (as the server's JSON
+    responses carry it) is recent enough to call the device "online" --
+    just a heartbeat-recency heuristic, not a live connectivity check."""
+    if last_seen_at is None:
+        return False
+    parsed = datetime.fromisoformat(last_seen_at)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    age = datetime.now(UTC) - parsed
+    return age.total_seconds() <= threshold_seconds
+
+
 @devices_app.command("list")
 def devices_list_cmd() -> None:
     """List every device you own (yours and any you've added).
@@ -881,10 +895,15 @@ def devices_list_cmd() -> None:
     table = Table(title="Your devices")
     table.add_column("Name")
     table.add_column("Status")
+    table.add_column("Online")
     table.add_column("Last seen")
     for d in devices:
-        status_text = "active" if d["enabled"] else "[yellow]disabled[/yellow]"
-        table.add_row(d["name"], status_text, d["last_seen_at"] or "never")
+        status_text = "enabled" if d["enabled"] else "[yellow]disabled[/yellow]"
+        online = _is_recent(
+            d["last_seen_at"], threshold_seconds=settings.device_online_threshold_seconds
+        )
+        online_text = "[green]online[/green]" if online else "[dim]offline[/dim]"
+        table.add_row(d["name"], status_text, online_text, d["last_seen_at"] or "never")
     console.print(table)
 
 

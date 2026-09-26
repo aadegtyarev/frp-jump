@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -420,6 +421,32 @@ def test_devices_list_shows_devices_from_the_server(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "wb01" in result.output
     assert "old" in result.output
+    assert "offline" in result.output
+
+
+def test_devices_list_shows_a_recently_seen_device_as_online(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    monkeypatch.setattr(
+        poller,
+        "list_devices",
+        lambda state: [
+            {"name": "wb01", "enabled": True, "last_seen_at": datetime.now(UTC).isoformat()},
+        ],
+    )
+
+    result = runner.invoke(client_cmds.app, ["devices", "list"])
+
+    assert result.exit_code == 0, result.output
+    assert "online" in result.output
+
+
+def test_is_recent_treats_a_naive_timestamp_as_utc():
+    naive_now = datetime.now(UTC).replace(tzinfo=None).isoformat()
+    assert client_cmds._is_recent(naive_now, threshold_seconds=30.0) is True
+
+
+def test_is_recent_is_false_for_none():
+    assert client_cmds._is_recent(None, threshold_seconds=30.0) is False
 
 
 def _write_keypair(path: Path, public_key: str) -> Path:

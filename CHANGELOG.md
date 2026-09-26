@@ -6,6 +6,17 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-09-26
+
+### Added
+
+- **`devices list` (both CLIs) shows an "Online" column** -- a
+  heartbeat-recency heuristic (`device_online_threshold_seconds`,
+  default 30s), distinct from "Status" (enabled/disabled, which is an
+  administrative flag, not liveness). Previously the only way to guess
+  whether a device was actually up was to eyeball a raw "Last seen"
+  timestamp yourself.
+
 ## [0.3.9] - 2026-09-26
 
 ### Changed

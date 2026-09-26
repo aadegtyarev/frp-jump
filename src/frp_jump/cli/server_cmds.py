@@ -493,10 +493,17 @@ def devices_list(
         table.add_column("Name")
         table.add_column("Owner")
         table.add_column("Status")
+        table.add_column("Online")
         table.add_column("Last seen")
         table.add_column("Connections")
         for d in devices:
             status = "enabled" if d.enabled else "[yellow]disabled[/yellow]"
+            online = (
+                d.last_seen_at is not None
+                and (datetime.datetime.now(datetime.UTC) - d.last_seen_at).total_seconds()
+                <= settings.device_online_threshold_seconds
+            )
+            online_text = "[green]online[/green]" if online else "[dim]offline[/dim]"
             last_seen = d.last_seen_at.isoformat() if d.last_seen_at else "never"
             parts = [
                 f"exposes :{g.target_port}"
@@ -506,7 +513,9 @@ def devices_list(
                 f"-> {g.exposer_device_name}:{g.target_port}"
                 for g in registry.consumed_grants_for_device(db, d.id)
             ]
-            table.add_row(d.name, d.owner_label, status, last_seen, ", ".join(parts) or "—")
+            table.add_row(
+                d.name, d.owner_label, status, online_text, last_seen, ", ".join(parts) or "—"
+            )
     console.print(table)
 
 

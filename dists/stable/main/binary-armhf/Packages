@@ -1,0 +1,17 @@
+Package: frp-jump-client
+Version: 0.3.14
+Architecture: armhf
+Maintainer: Alexander Degtyarev <a.degtyarev@struhe.com>
+Filename: pool/main/frp-jump-client_0.3.14_armhf.deb
+Size: 18429892
+MD5sum: 097d18a9d01eca60ae44470be091c6ed
+SHA1: 1675f8294c208a23cb065603f9511af0d87f7b7b
+SHA256: f1c4bcc5144c66ad4369e0e480cb26e6c9b1cc8cf6cfac19e6c81440cede7785
+Section: net
+Priority: optional
+Homepage: https://github.com/aadegtyarev/frp-jump
+Description: frp-jump tunnel agent (self-contained)
+ P2P-with-relay-fallback ssh/http/tcp tunnel client agent. Ships its own
+ Python 3.12 runtime under /opt/frp-jump-client -- does not touch or
+ require the system Python/pip/apt.
+

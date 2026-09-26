@@ -4,6 +4,7 @@ needed for any of it once you have one enrolled device)."""
 
 from __future__ import annotations
 
+import time
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from rich.table import Table
 
 from frp_jump.agent import enroll as enroll_mod
 from frp_jump.agent import poller
-from frp_jump.agent.state import Profile, load, save
+from frp_jump.agent.state import Profile, load, request_wake, save
 from frp_jump.common.settings import Settings
 from frp_jump.driver.base import ServiceProtocol
 from frp_jump.driver.frp.binaries import ensure_installed
@@ -61,6 +62,35 @@ def _make_driver(settings: Settings) -> FrpDriver:
         admin_port=settings.frpc_admin_port,
         fallback_timeout_ms=settings.xtcp_fallback_timeout_ms,
     )
+
+
+# How long `connect` waits, after waking the daemon, to see the local port
+# it allocates -- generous enough for a slow device's frpc restart, short
+# enough that a `run` daemon that isn't actually running (or is down) fails
+# fast with a clear "not applied yet" instead of hanging indefinitely.
+_LOCAL_PORT_WAIT_SECONDS = 10.0
+_LOCAL_PORT_POLL_INTERVAL_SECONDS = 0.5
+
+
+def _wait_for_local_port(data_dir: Path, grant_id: str) -> int | None:
+    deadline = time.monotonic() + _LOCAL_PORT_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        state = load(data_dir)
+        if state is not None and grant_id in state.local_ports:
+            return state.local_ports[grant_id]
+        time.sleep(_LOCAL_PORT_POLL_INTERVAL_SECONDS)
+    return None
+
+
+def _parse_device_port(target: str) -> tuple[str, int]:
+    device, sep, port_str = target.rpartition(":")
+    if not sep:
+        raise typer.BadParameter(f"expected DEVICE:PORT, e.g. wb01:22 -- got {target!r}")
+    try:
+        port = int(port_str)
+    except ValueError:
+        raise typer.BadParameter(f"{port_str!r} is not a valid port number") from None
+    return device, port
 
 
 @app.command("enroll")
@@ -156,7 +186,8 @@ def status_cmd() -> None:
         console.print(f"[yellow]could not reach server: {exc}[/yellow]")
         raise typer.Exit(1) from exc
 
-    exposed = Table(title="Exposed (other devices can reach these ports on you)")
+    console.print("\n[bold]Exposed[/bold] -- other devices can reach these ports on you")
+    exposed = Table()
     exposed.add_column("Port")
     for g in remote["exposed"]:
         exposed.add_row(str(g["target_port"]))
@@ -165,7 +196,8 @@ def status_cmd() -> None:
     profile_by_target = {
         (p.device_name, p.target_port): name for name, p in state.profiles.items()
     }
-    consumed = Table(title="Consumed (ports you connected to, via `connect`)")
+    console.print("[bold]Consumed[/bold] -- ports you connected to, via `connect`")
+    consumed = Table()
     consumed.add_column("Profile")
     consumed.add_column("Device")
     consumed.add_column("Port")
@@ -309,102 +341,221 @@ def delete_device_cmd(
         del state.profiles[profile_name]
     if stale:
         save(settings.data_dir, state)
+    request_wake(settings.data_dir)
     console.print(f"[green]Deleted[/green] {name}.")
 
 
 @app.command("connect")
 def connect_cmd(
-    device: str = typer.Argument(..., help="Device to connect to, from `frp-jump-client list`."),
-    port: int = typer.Argument(..., help="Port on that device to connect to, e.g. 22 for SSH."),
+    target: str = typer.Argument(
+        ...,
+        help="DEVICE:PORT to connect to, e.g. wb01:22 (device from `frp-jump-client "
+        "list`) -- or the name of an existing profile (from `profiles list`) to "
+        "reconnect it without retyping device/port.",
+    ),
     protocol: str = typer.Option(
         "ssh", "--protocol", help="What's listening on that port: ssh, tcp, or http."
     ),
     as_name: str | None = typer.Option(
         None,
         "--as",
-        help="Local name for this connection (used by `disconnect` and, for "
-        "ssh, as the `ssh <name>` host alias). Defaults to the device's own "
-        "name -- pick one explicitly if you connect to more than one port "
-        "on the same device.",
+        help="Save this connection as a named profile (used by `disconnect`/"
+        "`profiles` and, for ssh, as the `ssh <name>` host alias). Defaults to "
+        "the device's own name, or DEVICE-PORT if that name is already taken "
+        "by a different port on the same device -- set this explicitly for a "
+        "name of your own choosing. Only applies when connecting via "
+        "DEVICE:PORT, not when reconnecting an existing profile by name.",
     ),
 ) -> None:
-    """Wire this device up to consume a port on another device you own.
+    """Wire this device up to consume a port on another device you own, and
+    save it as a named profile for next time.
 
     Safe to re-run -- connecting again reuses the existing connection.
-    Takes effect within one agent poll interval on both ends, not
-    instantly; run `frp-jump-client status` to check.
+    Wakes a running `frp-jump-client run` immediately instead of waiting
+    out its normal poll interval, and waits (up to 10s) to show the local
+    port it picks; if nothing shows up in that time, `run` likely isn't
+    running yet or hasn't caught up -- `status` will show it once it has.
 
     Examples:
 
-        frp-jump-client connect wb01 22
+        frp-jump-client connect wb01:22
 
-        frp-jump-client connect wb01 8080 --protocol http --as wb01-web
+        frp-jump-client connect wb01:8080 --protocol http
+        # a second port on the same device -- auto-named "wb01-8080"
+        # since "wb01" is already the :22 profile; pass --as to pick
+        # your own name instead
+
+        frp-jump-client connect wb01-web
     """
+    settings = Settings()
+    state = _require_state(settings)
+
+    if ":" in target:
+        device, port = _parse_device_port(target)
+        if as_name is not None:
+            profile_name = as_name
+        else:
+            # Default to the device's own name (the common case: one port
+            # per device) -- but that name is already someone else's if
+            # you're connecting to a *second* port on the same device, so
+            # disambiguate automatically instead of making every
+            # multi-port connection require --as up front.
+            profile_name = device
+            existing = state.profiles.get(profile_name)
+            if existing is not None and (existing.device_name, existing.target_port) != (
+                device,
+                port,
+            ):
+                profile_name = f"{device}-{port}"
+
+        existing = state.profiles.get(profile_name)
+        if existing is not None and (existing.device_name, existing.target_port) != (
+            device,
+            port,
+        ):
+            console.print(
+                f"[red]{profile_name!r} is already used[/red] for "
+                f"{existing.device_name}:{existing.target_port} -- pick a different --as "
+                "name, or `profiles delete` it first to repurpose it"
+            )
+            raise typer.Exit(1)
+    else:
+        if as_name is not None:
+            console.print("[red]--as only applies when connecting via DEVICE:PORT[/red]")
+            raise typer.Exit(1)
+        profile = state.profiles.get(target)
+        if profile is None:
+            console.print(
+                f"[red]no profile named[/red] {target!r} -- use DEVICE:PORT, or see "
+                "[bold]frp-jump-client profiles list[/bold]"
+            )
+            raise typer.Exit(1)
+        device, port, profile_name = profile.device_name, profile.target_port, target
+
     try:
         protocol_enum = ServiceProtocol(protocol)
     except ValueError:
         console.print(f"[red]unknown protocol {protocol!r}[/red] -- use ssh, tcp, or http")
         raise typer.Exit(1) from None
 
-    settings = Settings()
-    state = _require_state(settings)
-    profile_name = as_name or device
-
-    existing = state.profiles.get(profile_name)
-    if existing is not None and (existing.device_name, existing.target_port) != (device, port):
-        console.print(
-            f"[red]{profile_name!r} is already used[/red] for "
-            f"{existing.device_name}:{existing.target_port} -- pick a different --as name"
-        )
-        raise typer.Exit(1)
-
     try:
-        poller.connect(state, device_name=device, target_port=port, protocol=protocol_enum)
+        result = poller.connect(state, device_name=device, target_port=port, protocol=protocol_enum)
     except poller.SyncError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
     state.profiles[profile_name] = Profile(device_name=device, target_port=port)
     save(settings.data_dir, state)
-    console.print(
-        f"[green]Connected[/green] to {device}:{port} as [bold]{profile_name}[/bold] "
-        f"-- takes effect within ~{settings.agent_poll_interval_seconds:.0f}s."
-    )
+    request_wake(settings.data_dir)
+
+    local_port = _wait_for_local_port(settings.data_dir, result["grant_id"])
+    if local_port is not None:
+        console.print(
+            f"[green]Connected[/green] to {device}:{port} as [bold]{profile_name}[/bold] "
+            f"-- 127.0.0.1:{local_port}"
+            + (f" (ssh {profile_name})" if protocol_enum == ServiceProtocol.SSH else "")
+        )
+    else:
+        console.print(
+            f"[green]Connected[/green] to {device}:{port} as [bold]{profile_name}[/bold] "
+            "-- no local port yet; is `frp-jump-client run` active? Check `status` shortly."
+        )
 
 
 @app.command("disconnect")
 def disconnect_cmd(
-    profile: str = typer.Argument(
-        ..., help="Local name from `connect --as` (or the device name, if you didn't set one)."
+    target: str = typer.Argument(
+        ...,
+        help="Local name from `connect --as` (or the device name, if you "
+        "didn't set one) -- or DEVICE:PORT directly, from the Device/Port "
+        "columns in `status`, if the profile is missing or you never set one.",
     ),
 ) -> None:
-    """Drop a connection previously made with `connect`.
+    """Drop a connection previously made with `connect`. Only tears down
+    the tunnel -- the saved profile (if any) stays put, so `connect
+    <name>` brings it right back later. Use `profiles delete` to actually
+    remove the saved shortcut.
 
-    Example:
+    Examples:
 
         frp-jump-client disconnect wb01
+
+        frp-jump-client disconnect wb01:22
     """
     settings = Settings()
     state = _require_state(settings)
-    target = state.profiles.get(profile)
-    if target is None:
-        console.print(
-            f"[red]no such connection[/red] {profile!r} -- see [bold]frp-jump-client status[/bold]"
-        )
-        raise typer.Exit(1)
+
+    profile = state.profiles.get(target)
+    if profile is not None:
+        device_name, target_port = profile.device_name, profile.target_port
+    else:
+        try:
+            device_name, target_port = _parse_device_port(target)
+        except typer.BadParameter:
+            console.print(
+                f"[red]no such connection[/red] {target!r} -- see "
+                "[bold]frp-jump-client status[/bold] for the Device/Port to pass "
+                "as DEVICE:PORT"
+            )
+            raise typer.Exit(1) from None
 
     try:
-        poller.disconnect(state, device_name=target.device_name, target_port=target.target_port)
+        poller.disconnect(state, device_name=device_name, target_port=target_port)
     except poller.NotConnectedError:
-        # Already gone server-side (e.g. the target device was deleted, or
-        # an admin revoked the grant) -- the desired end state is reached
-        # either way, so still prune the local profile instead of leaving
-        # it stuck forever (it would otherwise block reusing this --as name).
-        pass
+        pass  # already gone server-side -- the desired end state is reached either way
     except poller.SyncError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
-    del state.profiles[profile]
+    request_wake(settings.data_dir)
+    console.print(f"[green]Disconnected[/green] {device_name}:{target_port}.")
+
+
+profiles_app = typer.Typer(
+    help="Manage saved connection profiles -- local DEVICE:PORT shortcuts "
+    "created by `connect`. Purely client-side, never sent to the server."
+)
+app.add_typer(profiles_app, name="profiles")
+
+
+@profiles_app.command("list")
+def profiles_list_cmd() -> None:
+    """List your saved connection profiles.
+
+    Example:
+
+        frp-jump-client profiles list
+    """
+    settings = Settings()
+    state = _require_state(settings)
+    table = Table()
+    table.add_column("Name")
+    table.add_column("Device")
+    table.add_column("Port")
+    for profile_name, profile in sorted(state.profiles.items()):
+        table.add_row(profile_name, profile.device_name, str(profile.target_port))
+    console.print(table)
+
+
+@profiles_app.command("delete")
+def profiles_delete_cmd(
+    name: str = typer.Argument(..., help="Profile name, from `profiles list`."),
+) -> None:
+    """Remove a saved profile. Doesn't tear down anything server-side --
+    run `disconnect` first if the connection is still up. To edit a
+    profile instead, delete it and `connect DEVICE:PORT --as <name>` again.
+
+    Example:
+
+        frp-jump-client profiles delete wb01-web
+    """
+    settings = Settings()
+    state = _require_state(settings)
+    if name not in state.profiles:
+        console.print(
+            f"[red]no such profile[/red] {name!r} -- see [bold]frp-jump-client profiles list[/bold]"
+        )
+        raise typer.Exit(1)
+    del state.profiles[name]
     save(settings.data_dir, state)
-    console.print(f"[green]Disconnected[/green] {profile}.")
+    console.print(f"[green]Deleted profile[/green] {name}.")

@@ -6,6 +6,47 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-26
+
+### Fixed
+
+- `client run`'s long-lived agent process loaded `state.json` once at
+  startup and kept it in memory; a separate `client connect`/`disconnect`/
+  `delete-device` invocation (a different process) writing a new profile
+  to `state.json` while `run` was already looping could get silently
+  reverted the next time `run` had anything else to persist (e.g. a new
+  local port allocation) -- found live, on real Wiren Board hardware, as
+  `connect` reporting success and the tunnel actually working, but
+  `client status` never showing the profile. `sync_once` now reloads
+  `profiles` from disk at the start of every cycle instead of trusting
+  its own possibly-stale in-memory copy.
+
+### Added
+
+- `.deb` packaging for `frp-jump-client` (amd64/arm64/armhf), self-contained
+  under `/opt/frp-jump-client` with its own Python 3.12 -- never touches
+  the device's system Python/pip/apt. Built and published automatically
+  by the release workflow alongside the PyPI package.
+- `client connect`/`disconnect` now wake an already-running `client run`
+  immediately instead of waiting out its poll interval (up to 30s by
+  default) -- `connect` also waits briefly to show the local port it
+  picked, or a clear "not applied yet" message if `run` isn't active.
+- `client profiles list`/`profiles delete` -- profiles are persistent
+  saved shortcuts now, decoupled from whether the tunnel is currently up:
+  `disconnect` only tears down the connection, it no longer deletes the
+  profile; `connect <name>` reconnects a saved profile by name alone,
+  with no need to retype device/port.
+
+### Changed
+
+- `client connect` takes a single `DEVICE:PORT` argument (e.g. `wb01:22`)
+  instead of two separate positional arguments
+- `client disconnect` also accepts `DEVICE:PORT` directly (not just a
+  saved profile name), for when a profile is missing or was never set
+- `connect`'s default profile name (the device's own name) auto-adds the
+  port (`wb01-8080`) instead of refusing when you connect to a *second*
+  port on the same device without `--as`
+
 ## [0.2.0] - 2026-09-26
 
 ### Added

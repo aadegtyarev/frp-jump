@@ -51,6 +51,21 @@ def state_path(data_dir: Path) -> Path:
     return data_dir / "state.json"
 
 
+def wake_path(data_dir: Path) -> Path:
+    """A running `client run` sleeps between poll cycles in short
+    increments, checking for this file (see ``poller.run_forever``) --
+    a one-shot CLI command (`connect`/`disconnect`/...) touches it to
+    make the next cycle happen within a second or two instead of waiting
+    out the full poll interval. Harmless if no daemon is running: it just
+    sits there until one starts and clears it."""
+    return data_dir / "wake"
+
+
+def request_wake(data_dir: Path) -> None:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    wake_path(data_dir).touch()
+
+
 def load(data_dir: Path) -> AgentState | None:
     path = state_path(data_dir)
     if not path.exists():

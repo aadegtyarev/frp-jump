@@ -1,0 +1,14 @@
+[Unit]
+Description=frp-jump client agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/frp-jump/client.env
+ExecStart=/usr/bin/frp-jump-client run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

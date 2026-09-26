@@ -13,7 +13,7 @@ from urllib.parse import quote
 import httpx
 
 from frp_jump.agent import hosts
-from frp_jump.agent.state import AgentState, save
+from frp_jump.agent.state import AgentState, load, save, wake_path
 from frp_jump.common.api import AGENT_API_PREFIX
 from frp_jump.driver.base import (
     ConsumedGrant,
@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 # traffic itself, see common/models.py's module docstring), so one timeout
 # covers all of them; still overridable per call for e.g. a slower link.
 _HTTP_TIMEOUT_SECONDS = 15.0
+
+# How often `run_forever`'s sleep checks for a wake request (see
+# state.request_wake) between poll cycles -- short enough that `connect`/
+# `disconnect` feel closely to instant, long enough not to matter for CPU.
+_WAKE_CHECK_INTERVAL_SECONDS = 1.0
 
 
 class SyncError(RuntimeError):
@@ -311,7 +316,20 @@ def sync_once(
     agent_version: str | None = None,
     revalidate_ports: bool = False,
 ) -> DesiredState:
-    """One full cycle: heartbeat, pull desired state, apply it, refresh ssh config."""
+    """One full cycle: heartbeat, pull desired state, apply it, refresh ssh config.
+
+    ``state.profiles`` is refreshed from disk first: it's the one field of
+    this long-lived process's in-memory ``state`` that a separate, one-shot
+    CLI invocation (`client connect`/`disconnect`/`delete-device`) can also
+    write, while this loop only ever reads it. Skipping this reload would
+    have the daemon's next incidental write (e.g. a local port allocation
+    changing `state.profiles` right back to whatever it was when `run`
+    started, silently reverting a `connect` made after that.
+    """
+    on_disk = load(data_dir)
+    if on_disk is not None:
+        state.profiles = on_disk.profiles
+
     send_heartbeat(state, agent_version=agent_version)
     remote = fetch_desired_state(state)
     desired = build_desired_state(
@@ -320,6 +338,21 @@ def sync_once(
     driver.apply(desired)
     sync_ssh_config(state, remote, data_dir=data_dir, ssh_config_path=ssh_config_path)
     return desired
+
+
+def _sleep_or_wake(data_dir: Path, poll_interval_seconds: float) -> None:
+    """Sleep up to ``poll_interval_seconds``, but return early (consuming
+    the request) if a one-shot CLI command touched the wake file -- see
+    ``state.request_wake``."""
+    path = wake_path(data_dir)
+    remaining = poll_interval_seconds
+    while remaining > 0:
+        if path.exists():
+            path.unlink(missing_ok=True)
+            return
+        nap = min(_WAKE_CHECK_INTERVAL_SECONDS, remaining)
+        time.sleep(nap)
+        remaining -= nap
 
 
 def run_forever(
@@ -332,6 +365,11 @@ def run_forever(
     port_range: range,
     agent_version: str | None = None,
 ) -> None:
+    # A wake request from before this process even started (e.g. `connect`
+    # was run while the daemon was down) is moot -- the very first cycle
+    # below runs immediately regardless, with no prior sleep to skip.
+    wake_path(data_dir).unlink(missing_ok=True)
+
     # Revalidate persisted local ports only on the first successful cycle
     # after a (re)start -- see build_desired_state's docstring for why this
     # must not happen on every cycle.
@@ -355,4 +393,4 @@ def run_forever(
             # network blip, a server hiccup) -- log and keep polling rather
             # than requiring a process supervisor to notice and restart it.
             logger.exception("unexpected error during sync, will retry next cycle")
-        time.sleep(poll_interval_seconds)
+        _sleep_or_wake(data_dir, poll_interval_seconds)

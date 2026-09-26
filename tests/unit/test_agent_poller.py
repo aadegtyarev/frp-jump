@@ -609,3 +609,55 @@ def test_disconnect_raises_not_connected_error_on_404(monkeypatch) -> None:
     monkeypatch.setattr(poller.httpx, "post", fake_post)
     with pytest.raises(poller.NotConnectedError):
         poller.disconnect(state, device_name="wb01", target_port=22)
+
+
+def test_sync_once_does_not_clobber_a_profile_added_by_a_concurrent_cli_command(
+    tmp_path, monkeypatch
+) -> None:
+    """Reproduces a real bug found on live hardware: `run` loads state.json
+    once at startup and keeps it in memory; a separate `client connect`
+    invocation (a different process) writes a new profile to state.json
+    while `run` is already looping. The next cycle that has anything else
+    to persist (here: a newly-allocated local port) must not silently
+    revert that profile back to what it was when `run` started."""
+    from frp_jump.agent.state import save as save_state
+
+    state = _state()
+    save_state(tmp_path, state)  # what's on disk when `run` "started"
+
+    # A separate `client connect` process writes a profile after that.
+    on_disk = load(tmp_path)
+    on_disk.profiles = {"wb01": Profile(device_name="wb01", target_port=22)}
+    save_state(tmp_path, on_disk)
+
+    driver = FakeDriver()
+
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    def fake_get(url, *, headers, timeout):
+        remote = {
+            "exposed": [],
+            "consumed": [
+                {
+                    "grant_id": "g1",
+                    "secret": "s1",
+                    "service_name": "svc-1-22",
+                    "protocol": "ssh",
+                    "exposer_device_name": "wb01",
+                    "target_port": 22,
+                }
+            ],
+        }
+        return httpx.Response(200, json=remote, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    monkeypatch.setattr(poller.httpx, "get", fake_get)
+
+    ssh_config_path = tmp_path / "ssh_config_real"
+    poller.sync_once(
+        state, driver, data_dir=tmp_path, ssh_config_path=ssh_config_path, port_range=_PORT_RANGE
+    )
+
+    reloaded = load(tmp_path)
+    assert reloaded.profiles == {"wb01": Profile(device_name="wb01", target_port=22)}

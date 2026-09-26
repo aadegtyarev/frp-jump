@@ -518,23 +518,27 @@ def sync_once(
 ) -> DesiredState:
     """One full cycle: heartbeat, pull desired state, apply it, refresh ssh config.
 
-    ``state.profiles``/``state.local_ports`` are refreshed from disk
-    first: both are fields of this long-lived process's in-memory
-    ``state`` that a separate, one-shot CLI invocation (`client connect`/
-    `disconnect`/`delete-device`) can also write, while this loop mostly
-    only reads them (aside from allocating a fresh port for a brand-new
-    grant). Skipping this reload for ``profiles`` would have the daemon's
-    next incidental write silently revert a `connect` made after `run`
-    started; skipping it for ``local_ports`` had a sharper version of the
-    same bug -- `connect --local-port N` writes the pin straight to disk,
-    but the running daemon's own in-memory copy has no entry for that
-    grant yet, so it allocated a fresh port and immediately saved over
-    the pin, before ever reading this function's docstring's promise.
+    ``state.profiles``/``state.local_ports``/``state.disable_p2p`` are
+    refreshed from disk first: all three are fields of this long-lived
+    process's in-memory ``state`` that a separate, one-shot CLI
+    invocation (`client connect`/`disconnect`/`set-p2p`) can also write,
+    while this loop mostly only reads them (aside from allocating a
+    fresh port for a brand-new grant). Skipping this reload for
+    ``profiles`` would have the daemon's next incidental write silently
+    revert a `connect` made after `run` started; skipping it for
+    ``local_ports`` had a sharper version of the same bug -- `connect
+    --local-port N` writes the pin straight to disk, but the running
+    daemon's own in-memory copy has no entry for that grant yet, so it
+    allocated a fresh port and immediately saved over the pin. Skipping
+    it for ``disable_p2p`` would mean `set-p2p` silently requires a
+    daemon restart to take effect, despite waking it same as `connect`/
+    `disconnect` and claiming otherwise in its own `--help`.
     """
     on_disk = load(data_dir)
     if on_disk is not None:
         state.profiles = on_disk.profiles
         state.local_ports = on_disk.local_ports
+        state.disable_p2p = on_disk.disable_p2p
 
     send_heartbeat(state, agent_version=agent_version)
     remote = fetch_desired_state(state)
@@ -542,7 +546,7 @@ def sync_once(
     desired = build_desired_state(
         state, remote, data_dir=data_dir, port_range=port_range, revalidate=revalidate_ports
     )
-    driver.apply(desired)
+    driver.apply(desired, disable_p2p=state.disable_p2p)
     sync_ssh_config(state, remote, data_dir=data_dir, ssh_config_path=ssh_config_path)
     return desired
 

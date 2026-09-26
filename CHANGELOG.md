@@ -6,6 +6,19 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.14] - 2026-09-26
+
+### Fixed
+
+- **`set-p2p` silently did nothing on an already-running `run` daemon.**
+  `disable_p2p` was read once, at driver-construction time, instead of
+  every poll cycle like `state.json`'s other agent-writable fields
+  (`profiles`, `local_ports`) already were -- so toggling it while
+  `run` was already looping had no effect until the daemon was
+  restarted, despite `set-p2p --help` promising the next poll cycle
+  picks it up. `TunnelDriver.apply()` now takes `disable_p2p` per call
+  instead of at construction.
+
 ## [0.3.13] - 2026-09-26
 
 ### Added

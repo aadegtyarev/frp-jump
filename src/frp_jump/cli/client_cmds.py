@@ -115,17 +115,16 @@ def _settings_for_service_ops(*, user_service: bool, system_user: str | None = N
     return settings
 
 
-def _make_driver(settings: Settings, *, disable_p2p: bool) -> FrpDriver:
+def _make_driver(settings: Settings) -> FrpDriver:
     binaries = ensure_installed(settings.data_dir / "bin", version=settings.frp_version)
     return FrpDriver(
         binary=binaries.frpc,
         state_dir=settings.data_dir / "frpc",
         fallback_timeout_ms=settings.xtcp_fallback_timeout_ms,
-        disable_p2p=disable_p2p,
     )
 
 
-def _make_driver_with_retry(settings: Settings, *, disable_p2p: bool) -> FrpDriver:
+def _make_driver_with_retry(settings: Settings) -> FrpDriver:
     """Same as `_make_driver`, but a network hiccup while downloading the
     (first-run-only) frp binaries is not fatal -- print and back off/retry
     like `run_forever`'s own sync loop, instead of exiting and leaving a
@@ -136,7 +135,7 @@ def _make_driver_with_retry(settings: Settings, *, disable_p2p: bool) -> FrpDriv
     backoff = poller.BACKOFF_INITIAL_SECONDS
     while True:
         try:
-            return _make_driver(settings, disable_p2p=disable_p2p)
+            return _make_driver(settings)
         except httpx.HTTPError as exc:
             console.print(
                 f"[yellow]could not download frp ({exc}) -- retrying in {backoff:.0f}s[/yellow]"
@@ -509,7 +508,7 @@ def run_cmd(
 
     settings = Settings()
     state = _require_state(settings)
-    driver = _make_driver_with_retry(settings, disable_p2p=state.disable_p2p)
+    driver = _make_driver_with_retry(settings)
     interval = poll_interval if poll_interval is not None else settings.agent_poll_interval_seconds
 
     console.print(

@@ -155,18 +155,30 @@ def test_apply_uses_configured_fallback_timeout(tmp_path) -> None:
 
 def test_apply_disable_p2p_omits_xtcp_visitor(tmp_path) -> None:
     supervisor = FakeSupervisor()
-    driver = FrpDriver(
-        binary=Path("/opt/frp/frpc"),
-        state_dir=tmp_path,
-        fallback_timeout_ms=_FALLBACK_TIMEOUT_MS,
-        disable_p2p=True,
-        supervisor=supervisor,
-    )
+    driver = _make_driver(tmp_path, supervisor)
     consumed = (ConsumedGrant(grant_id="g1", secret="s", local_bind_port=2222),)
-    driver.apply(_desired(consumed=consumed))
+    driver.apply(_desired(consumed=consumed), disable_p2p=True)
     config_text = (tmp_path / "frpc.toml").read_text()
     assert "g1-xtcp-visitor" not in config_text
     assert "fallbackTo" not in config_text
+
+
+def test_apply_disable_p2p_is_not_sticky_across_calls(tmp_path) -> None:
+    """Regression test: `disable_p2p` used to be baked into the driver at
+    construction time, so a `set-p2p` toggle written to state.json never
+    reached an already-running daemon until it was restarted -- despite
+    `set-p2p --help` promising the next poll cycle picks it up. It must be
+    read fresh on every `apply()` call instead."""
+    supervisor = FakeSupervisor()
+    driver = _make_driver(tmp_path, supervisor)
+    consumed = (ConsumedGrant(grant_id="g1", secret="s", local_bind_port=2222),)
+    desired = _desired(consumed=consumed)
+
+    driver.apply(desired, disable_p2p=True)
+    assert "g1-xtcp-visitor" not in (tmp_path / "frpc.toml").read_text()
+
+    driver.apply(desired, disable_p2p=False)
+    assert "g1-xtcp-visitor" in (tmp_path / "frpc.toml").read_text()
 
 
 def test_relay_driver_writes_tls_material_and_forces_tls(tmp_path) -> None:

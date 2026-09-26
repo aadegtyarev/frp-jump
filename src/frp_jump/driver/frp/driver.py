@@ -111,18 +111,16 @@ class FrpDriver:
         binary: Path,
         state_dir: Path,
         fallback_timeout_ms: int,
-        disable_p2p: bool = False,
         supervisor: ProcessSupervisor | None = None,
     ) -> None:
         self._binary = binary
         self._config_path = state_dir / "frpc.toml"
         self._tls_dir = state_dir / "tls"
         self._fallback_timeout_ms = fallback_timeout_ms
-        self._disable_p2p = disable_p2p
         self._supervisor = supervisor or SubprocessSupervisor()
         self._fingerprint: str | None = None
 
-    def apply(self, desired: DesiredState) -> None:
+    def apply(self, desired: DesiredState, *, disable_p2p: bool = False) -> None:
         cert_file, key_file, ca_file = _write_tls_files(self._tls_dir, desired)
         config = build_frpc_config(
             desired,
@@ -130,7 +128,7 @@ class FrpDriver:
             key_file=key_file,
             ca_file=ca_file,
             fallback_timeout_ms=self._fallback_timeout_ms,
-            disable_p2p=self._disable_p2p,
+            disable_p2p=disable_p2p,
         )
         # Deliberately no webServer/admin API here: frpc's admin API has no
         # auth of its own and nothing in this codebase ever reads it (unlike

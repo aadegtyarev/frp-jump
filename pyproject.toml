@@ -1,6 +1,6 @@
 [project]
 name = "frp-jump"
-version = "0.3.13"
+version = "0.3.14"
 description = "P2P-with-relay-fallback ssh/tcp tunnels between Linux boxes, built on frp"
 readme = "README.md"
 license = "MIT"

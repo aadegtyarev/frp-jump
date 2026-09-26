@@ -601,7 +601,7 @@ def test_doctor_reports_a_protocol_mismatch(tmp_path, monkeypatch):
 
 def test_run_uses_the_default_poll_interval_when_not_overridden(tmp_path, monkeypatch):
     _enrolled_state(tmp_path)
-    monkeypatch.setattr(client_cmds, "_make_driver_with_retry", lambda settings, **kwargs: object())
+    monkeypatch.setattr(client_cmds, "_make_driver_with_retry", lambda settings: object())
     captured = {}
     monkeypatch.setattr(
         client_cmds.poller,
@@ -617,7 +617,7 @@ def test_run_uses_the_default_poll_interval_when_not_overridden(tmp_path, monkey
 
 def test_run_poll_interval_overrides_the_default(tmp_path, monkeypatch):
     _enrolled_state(tmp_path)
-    monkeypatch.setattr(client_cmds, "_make_driver_with_retry", lambda settings, **kwargs: object())
+    monkeypatch.setattr(client_cmds, "_make_driver_with_retry", lambda settings: object())
     captured = {}
     monkeypatch.setattr(
         client_cmds.poller,

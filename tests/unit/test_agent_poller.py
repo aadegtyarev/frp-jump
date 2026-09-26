@@ -32,9 +32,11 @@ def _state(**overrides) -> AgentState:
 class FakeDriver:
     def __init__(self) -> None:
         self.applied = []
+        self.disable_p2p_calls = []
 
-    def apply(self, desired) -> None:
+    def apply(self, desired, *, disable_p2p=False) -> None:
         self.applied.append(desired)
+        self.disable_p2p_calls.append(disable_p2p)
 
     def status(self):
         raise NotImplementedError
@@ -860,6 +862,44 @@ def test_sync_once_does_not_clobber_a_local_port_pinned_by_a_concurrent_cli_comm
     reloaded = load(tmp_path)
     assert reloaded.local_ports["g1"] == 2222
     assert driver.applied[-1].consumed[0].local_bind_port == 2222
+
+
+def test_sync_once_picks_up_p2p_disabled_by_a_concurrent_cli_command(tmp_path, monkeypatch) -> None:
+    """Regression test: `run` used to read `disable_p2p` only once, at
+    driver-construction time -- a separate `client set-p2p disabled`
+    process writing state.json while `run` was already looping had no
+    effect until the daemon was restarted, despite `set-p2p --help`
+    promising the next poll cycle picks it up (same class of bug as the
+    profile/local_port clobbering above, just the other direction: a
+    write this loop fails to *read* instead of one it clobbers)."""
+    from frp_jump.agent.state import save as save_state
+
+    state = _state()
+    save_state(tmp_path, state)  # what's on disk when `run` "started"
+
+    # A separate `client set-p2p disabled` process flips it after that.
+    on_disk = load(tmp_path)
+    on_disk.disable_p2p = True
+    save_state(tmp_path, on_disk)
+
+    driver = FakeDriver()
+
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    def fake_get(url, *, headers, timeout):
+        remote = {"exposed": [], "consumed": [], "protocol_version": poller.PROTOCOL_VERSION}
+        return httpx.Response(200, json=remote, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    monkeypatch.setattr(poller.httpx, "get", fake_get)
+
+    ssh_config_path = tmp_path / "ssh_config_real"
+    poller.sync_once(
+        state, driver, data_dir=tmp_path, ssh_config_path=ssh_config_path, port_range=_PORT_RANGE
+    )
+
+    assert driver.disable_p2p_calls == [True]
 
 
 def test_disable_device_posts_to_the_disable_endpoint(monkeypatch) -> None:

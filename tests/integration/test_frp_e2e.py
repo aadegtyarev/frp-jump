@@ -81,7 +81,6 @@ def test_grant_proxies_traffic_from_consumer_to_exposer(tmp_path, frp_binaries) 
     exposer = FrpDriver(
         binary=frp_binaries.frpc,
         state_dir=tmp_path / "exposer",
-        admin_port=_free_port(),
         fallback_timeout_ms=1500,
     )
     exposer_pair = ca.issue("exposer")
@@ -89,7 +88,6 @@ def test_grant_proxies_traffic_from_consumer_to_exposer(tmp_path, frp_binaries) 
     consumer = FrpDriver(
         binary=frp_binaries.frpc,
         state_dir=tmp_path / "consumer",
-        admin_port=_free_port(),
         fallback_timeout_ms=1500,
     )
     consumer_pair = ca.issue("consumer")
@@ -178,14 +176,12 @@ def test_frps_rejects_a_client_whose_cert_chains_to_a_different_ca(tmp_path, frp
     exposer = FrpDriver(
         binary=frp_binaries.frpc,
         state_dir=tmp_path / "rogue-exposer",
-        admin_port=_free_port(),
         fallback_timeout_ms=1500,
     )
 
     consumer = FrpDriver(
         binary=frp_binaries.frpc,
         state_dir=tmp_path / "consumer",
-        admin_port=_free_port(),
         fallback_timeout_ms=1500,
     )
     consumer_pair = real_ca.issue("consumer")

@@ -355,6 +355,7 @@ def set_my_key_challenge(
 class SetKeyRequest(BaseModel):
     challenge_id: str
     signature: str  # base64, over the challenge bytes, made with the NEW key
+    current_signature: str  # base64, same challenge bytes, made with the CURRENT key
 
 
 @router.post("/users/set-key", status_code=status.HTTP_204_NO_CONTENT)
@@ -363,11 +364,15 @@ def set_my_key(
     db: Annotated[DbSession, Depends(get_db)],
     device: Annotated[Device, Depends(get_enabled_device)],
 ) -> None:
-    """Step 2: redeem the signed challenge and rotate the calling device
-    owner's SSH key to it."""
+    """Step 2: redeem the signed challenge -- proven held by both the new
+    key and the account's current key -- and rotate to the new one."""
     try:
         registry.redeem_key_rotation_challenge(
-            db, body.challenge_id, body.signature, device_id=device.id
+            db,
+            body.challenge_id,
+            body.signature,
+            current_signature_b64=body.current_signature,
+            device_id=device.id,
         )
     except (registry.NotFoundError, registry.ValidationError) as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc

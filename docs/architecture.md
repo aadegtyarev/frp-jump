@@ -1,8 +1,6 @@
 # Architecture
 
-This mirrors the original implementation plan, updated for what actually
-got built and a few things learned along the way. See the module layout in
-the README first if you haven't already.
+See the module layout in the README first if you haven't already.
 
 ## Data flow
 
@@ -91,11 +89,10 @@ transport.useEncryption = true
 ```
 
 This is entirely frp's own mechanism (`client/visitor/xtcp.go`'s
-`fallbackTo`), verified live in this sandbox: xtcp hole-punching timed out
-(`open tunnel timeout`) after the configured timeout, frp fell back to the
-stcp visitor, and the request succeeded — then hole-punching finished in
-the background a moment later, exactly as frp's own docs describe. See
-`tests/integration/test_frp_e2e.py`.
+`fallbackTo`): xtcp hole-punching is attempted first, and on timeout frp
+falls back to the stcp visitor while hole-punching keeps retrying in the
+background. See `tests/integration/test_frp_e2e.py` for this exercised
+end to end.
 
 **The consumer picks its own local port**, not the server — the server
 doesn't know what's free on a given device, so `agent/poller.py` allocates
@@ -179,14 +176,17 @@ vice versa.
 A user can rotate their key at any time -- `frp-jump-server users
 set-key <label> <new-key.pub>` (admin recovery, trusted by construction:
 an operator with shell access on the box) or self-service
-`frp-jump-client set-key <new-private-key-path>` (bearer-authed via any
-of their own enrolled devices). The self-service path is a signed
-challenge/response round trip too, same shape as key-based enrollment
-above (`POST /api/agent/users/set-key/challenge {public_key}` then `POST
-/api/agent/users/set-key {challenge_id, signature}`, `registry
-.create_key_rotation_challenge`/`redeem_key_rotation_challenge`) --
-a bearer token alone must not be enough to repoint the account at a key
-nobody has proven they actually hold.
+`frp-jump-client set-key <new-private-key-path> <current-private-key-path>`
+(bearer-authed via any of their own enrolled devices). The self-service
+path is a signed challenge/response round trip: `POST
+/api/agent/users/set-key/challenge {public_key}` returns a nonce, then
+`POST /api/agent/users/set-key {challenge_id, signature, current_signature}`
+must carry that same nonce signed by *both* the new key and the account's
+currently-registered key before `registry.redeem_key_rotation_challenge`
+rotates anything. Requiring the current key too (not just the new one)
+means a bearer token from a single compromised device is never enough on
+its own to hijack the whole account -- losing the current key outright
+falls back to the admin recovery path above.
 
 ## Device/grant lifecycle
 
@@ -255,7 +255,7 @@ today: X in / Y out" figure per connection, sourced from frps's own local
 admin API (`driver.frp.driver.fetch_proxy_traffic`, `GET /api/proxy/stcp/
 <name>` on `127.0.0.1:{frps_admin_port}`). This is deliberately scoped to
 *relayed* traffic only, not total traffic, for a reason grounded in
-frp's own source (`fatedier/frp`, checked directly): every grant's `stcp`
+frp's own source (`fatedier/frp`): every grant's `stcp`
 proxy always has its data flow through frps by construction, and frps
 does track bytes for it (`server/proxy/proxy.go`'s
 `handleUserTCPConnection`, shared by `tcp`/`http`/`stcp`, calls
@@ -275,79 +275,14 @@ instead -- a materially bigger feature, not implemented.
 `frp-jump-client` and `frp-jump-server` are separate `[project.scripts]`
 entry points in one package (`pyproject.toml`), with fastapi/uvicorn/
 sqlmodel moved to an optional `[server]` extra -- a device-only `pip
-install frp-jump` never imports them (jinja2/python-multipart were also
-in that extra before the WebUI was removed; gone now too, nothing needs
-them). There used to also be a combined `frp-jump server/client ...`
-entry point (`cli/main.py`); it was removed once the two dedicated
-commands existed, since a role-agnostic third entry point that also had
-to conditionally hide `server ...` on a device-only install was needless
-complexity once nothing depended on it.
-
-## Security hardening pass (0.2.0, WebUI-era)
-
-Historical record from before the WebUI was removed (0.3.0) -- kept for
-context on what was already reviewed and fixed once; `server/web.py`/
-`require_admin`/the session cookie no longer exist, see "Identity and
-enrollment" and "Device/grant lifecycle" above for the current model. An
-independent Opus review (see git history around this section) found
-three blocking issues and several should-fix ones in the initial build,
-all now fixed:
-
-- **Authorization**: only `is_admin` users could reach fleet-mutating
-  routes (`/devices/enroll-token`, `/services`, `/grants`, and the
-  `/revoke` routes) -- previously any logged-in user could grant
-  themselves access to any device. `server/web.py`'s `require_admin`
-  dependency.
-- **ssh_config injection**: device and service names are now validated
-  against a strict charset (`registry._NAME_RE`) before they can reach
-  `agent/hosts.py`'s generated `~/.ssh/config` -- previously an
-  unsanitized name (e.g. containing a newline) could inject a
-  `ProxyCommand` block, i.e. RCE on the consuming device, reachable from
-  any logged-in session before the authorization fix above.
-- **Agent resilience**: `fetch_desired_state`/`send_heartbeat` previously
-  only turned a non-2xx *response* into `SyncError`; a transport-level
-  failure (DNS, connection refused, timeout -- `httpx.HTTPError`'s tree,
-  not caught by the same `except`) propagated raw and killed
-  `run_forever`. Both now wrap transport errors into `SyncError`, and
-  `run_forever` also catches bare `Exception` as a last resort so a bug
-  elsewhere in the cycle can't kill the daemon either.
-- **Non-atomic `state.json` write**: truncate-then-write on the device's
-  only copy of its private key/cert/api_token, on every newly-seen grant.
-  Now write-temp + fsync + `os.replace`. See `agent/state.save`.
-- **No revocation path** -- see the "Grant wiring" section above.
-- **SQLite `foreign_keys` was never enabled** -- every `foreign_key=` in
-  `common/models.py` was decorative; `server/db.py` now sets
-  `PRAGMA foreign_keys=ON` on connect, and `registry.create_service`/
-  `create_grant` also validate the referenced rows exist up front for a
-  clean `NotFoundError` instead of a raw `IntegrityError`.
-- **Private keys written world-readable** (`chmod` after `write_bytes`,
-  briefly readable under the default umask) in `driver/frp/driver.py` and
-  `server/bootstrap.py` -- both now use `common.pki.write_private_key`,
-  which opens with mode `0600` from creation.
-- **Session cookie's `Secure` flag** was keyed only off
-  `request.url.scheme`, which is always `"http"` in the documented
-  TLS-terminating-reverse-proxy deployment (uvicorn itself never sees
-  TLS) -- silently losing `Secure` on a 30-day cookie. Now also trusts
-  `settings.public_base_url` starting with `https://`.
-- **Login tokens in access logs**: `GET /auth/<token>` would otherwise
-  write the raw token to uvicorn's access log on every visit. `server run`
-  now passes `access_log=False`.
-- Added the highest-value missing test: `frps` actually rejecting a
-  client cert that chains to a different CA
-  (`test_frps_rejects_a_client_whose_cert_chains_to_a_different_ca`) --
-  the core "an unenrolled device cannot reach the relay at all" claim was
-  previously only asserted in prose.
-
-**Still open** (reviewed, accepted as-is for now): `ensure_installed`'s
-checksum file is fetched from the same host/connection as the binary it
-verifies, so it only guards against corruption/truncation, not a
-compromised connection or release -- `driver/frp/binaries.py`'s module
-docstring now says so explicitly instead of overclaiming. A concurrent
-enroll of the same one-time token twice can still hit a raw
-`IntegrityError` (very low practical likelihood; single-use token race).
+install frp-jump` never imports them.
 
 ## Known limitations / follow-ups
 
+- **`ensure_installed`'s checksum file is fetched from the same
+  host/connection as the binary it verifies** -- it guards against
+  corruption/truncation, not a compromised connection or release.
+  `driver/frp/binaries.py`'s module docstring says so explicitly.
 - **frpc's admin API can't tell you p2p-vs-relay for a *visitor*.**
   Checked against `fatedier/frp`'s `client/api_router.go` (dev branch):
   `/api/status` reports proxy status on the *exposing* side, there's no
@@ -371,7 +306,7 @@ enroll of the same one-time token twice can still hit a raw
   worth hardening with explicit `signal.signal(SIGTERM, ...)` handling if
   it recurs.
 
-## Gotchas hit while building this (kept here so they don't get re-learned)
+## Implementation notes
 
 - **x509 serial numbers overflow SQLite's `INTEGER`.**
   `cryptography`'s `random_serial_number()` can return up to a 160-bit
@@ -386,10 +321,12 @@ enroll of the same one-time token twice can still hit a raw
   `serverAddr` is a bare IP.** Go's TLS client won't match a `dNSName`
   entry against an IP host at all. `common/pki._san_entries` picks the
   right SAN type per entry automatically.
-- **Two frpc/frps instances on one host need distinct `webServer` (admin
-  API) ports** — there's no sane shared default, which is exactly why
-  `admin_port` has no default in `FrpDriver`/`FrpsRelayDriver` and must be
-  passed explicitly (from `Settings`, ultimately).
+- **Only `FrpsRelayDriver` (the server side) has an admin API port.**
+  `FrpDriver` (the client side) deliberately never enables frpc's own
+  `webServer` -- see its module docstring in `driver/frp/driver.py`.
+  Multiple `FrpsRelayDriver` instances on one host still need distinct
+  `admin_port` values, which is why it has no default and must be passed
+  explicitly (from `Settings`, ultimately).
 - **A freshly-minted `EnrollToken` for a name doesn't block a second one
   for the same name** unless you check pending (unused, unexpired) tokens
   too, not just already-enrolled `Device` rows — otherwise two unredeemed

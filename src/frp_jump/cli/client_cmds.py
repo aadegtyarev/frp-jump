@@ -95,7 +95,6 @@ def _make_driver(settings: Settings) -> FrpDriver:
     return FrpDriver(
         binary=binaries.frpc,
         state_dir=settings.data_dir / "frpc",
-        admin_port=settings.frpc_admin_port,
         fallback_timeout_ms=settings.xtcp_fallback_timeout_ms,
     )
 
@@ -363,21 +362,32 @@ def set_key_cmd(
         help="Path to your new SSH private key, e.g. ~/.ssh/id_ed25519_new -- "
         "proves you actually hold it before rotating.",
     ),
+    current_keyfile: Path = typer.Argument(
+        ...,
+        help="Path to your CURRENT SSH private key (the one already "
+        "registered) -- proves you still hold that one too, so a bearer "
+        "token from a single device is never enough on its own to take "
+        "over the whole account. Lost your current key entirely? An "
+        "admin has to run `frp-jump-server users set-key` instead.",
+    ),
 ) -> None:
     """Rotate your own SSH key -- e.g. you generated a new one. Signs a
-    server-issued challenge with the new key to prove you hold it before
-    the rotation takes effect; updates every device you own, no separate
-    action needed on any of them.
+    server-issued challenge with both the new key and your current one to
+    prove you hold both before the rotation takes effect; updates every
+    device you own, no separate action needed on any of them.
 
     Example:
 
-        frp-jump-client set-key ~/.ssh/id_ed25519_new
+        frp-jump-client set-key ~/.ssh/id_ed25519_new ~/.ssh/id_ed25519
     """
     settings = Settings()
     state = _require_state(settings)
     identity_path, public_key = _resolve_keypair(keyfile.expanduser())
+    current_identity_path, _ = _resolve_keypair(current_keyfile.expanduser())
     try:
-        poller.set_key(state, identity_path, public_key)
+        poller.set_key(
+            state, identity_path, public_key, current_identity_path=current_identity_path
+        )
     except poller.SyncError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc

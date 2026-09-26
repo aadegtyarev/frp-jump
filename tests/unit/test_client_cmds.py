@@ -422,48 +422,60 @@ def test_devices_list_shows_devices_from_the_server(tmp_path, monkeypatch):
     assert "old" in result.output
 
 
-def test_set_key_signs_the_challenge_with_the_private_key(tmp_path, monkeypatch):
+def _write_keypair(path: Path, public_key: str) -> Path:
+    path.write_text("private-key-material")
+    path.with_suffix(".pub").write_text(public_key)
+    return path
+
+
+def test_set_key_signs_the_challenge_with_both_keys(tmp_path, monkeypatch):
     _enrolled_state(tmp_path)
-    key_path = tmp_path / "new_key"
-    key_path.write_text("private-key-material")
-    key_path.with_suffix(".pub").write_text("ssh-ed25519 AAAA... me@host\n")
+    key_path = _write_keypair(tmp_path / "new_key", "ssh-ed25519 AAAA... me@host\n")
+    current_key_path = _write_keypair(tmp_path / "current_key", "ssh-ed25519 BBBB... me@host\n")
     called = []
     monkeypatch.setattr(
         poller,
         "set_key",
-        lambda state, identity_path, public_key: called.append((identity_path, public_key)),
+        lambda state, identity_path, public_key, *, current_identity_path: called.append(
+            (identity_path, public_key, current_identity_path)
+        ),
     )
 
-    result = runner.invoke(client_cmds.app, ["set-key", str(key_path)])
+    result = runner.invoke(client_cmds.app, ["set-key", str(key_path), str(current_key_path)])
 
     assert result.exit_code == 0, result.output
-    assert called == [(key_path, "ssh-ed25519 AAAA... me@host\n")]
+    assert called == [(key_path, "ssh-ed25519 AAAA... me@host\n", current_key_path)]
 
 
 def test_set_key_accepts_the_pub_sibling_too(tmp_path, monkeypatch):
     _enrolled_state(tmp_path)
-    key_path = tmp_path / "new_key"
-    key_path.write_text("private-key-material")
-    key_path.with_suffix(".pub").write_text("ssh-ed25519 AAAA... me@host\n")
+    key_path = _write_keypair(tmp_path / "new_key", "ssh-ed25519 AAAA... me@host\n")
+    current_key_path = _write_keypair(tmp_path / "current_key", "ssh-ed25519 BBBB... me@host\n")
     called = []
     monkeypatch.setattr(
         poller,
         "set_key",
-        lambda state, identity_path, public_key: called.append((identity_path, public_key)),
+        lambda state, identity_path, public_key, *, current_identity_path: called.append(
+            (identity_path, public_key, current_identity_path)
+        ),
     )
 
-    result = runner.invoke(client_cmds.app, ["set-key", str(key_path.with_suffix(".pub"))])
+    result = runner.invoke(
+        client_cmds.app,
+        ["set-key", str(key_path.with_suffix(".pub")), str(current_key_path)],
+    )
 
     assert result.exit_code == 0, result.output
-    assert called == [(key_path, "ssh-ed25519 AAAA... me@host\n")]
+    assert called == [(key_path, "ssh-ed25519 AAAA... me@host\n", current_key_path)]
 
 
 def test_set_key_rejects_a_missing_pub_file(tmp_path):
     _enrolled_state(tmp_path)
     key_path = tmp_path / "new_key"
     key_path.write_text("private-key-material")
+    current_key_path = _write_keypair(tmp_path / "current_key", "ssh-ed25519 BBBB... me@host\n")
 
-    result = runner.invoke(client_cmds.app, ["set-key", str(key_path)])
+    result = runner.invoke(client_cmds.app, ["set-key", str(key_path), str(current_key_path)])
 
     assert result.exit_code == 1
     assert "could not find" in result.output
@@ -474,8 +486,9 @@ def test_set_key_rejects_an_empty_pub_file(tmp_path):
     key_path = tmp_path / "new_key"
     key_path.write_text("private-key-material")
     key_path.with_suffix(".pub").write_text("")
+    current_key_path = _write_keypair(tmp_path / "current_key", "ssh-ed25519 BBBB... me@host\n")
 
-    result = runner.invoke(client_cmds.app, ["set-key", str(key_path)])
+    result = runner.invoke(client_cmds.app, ["set-key", str(key_path), str(current_key_path)])
 
     assert result.exit_code == 1
     assert "empty" in result.output
@@ -559,7 +572,7 @@ def test_commands_require_enrollment_first(tmp_path):
         ["connect", "wb01:22"],
         ["disconnect", "wb01"],
         ["devices", "add-token"],
-        ["set-key", "some.pub"],
+        ["set-key", "some.pub", "current.pub"],
         ["install-service"],
     )
     for args in commands:

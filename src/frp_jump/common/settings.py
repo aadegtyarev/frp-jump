@@ -53,7 +53,6 @@ class Settings(BaseSettings):
     # config file before `server init` will run.
     relay_public_addr: str | None = None
     relay_bind_port: int = 7000
-    frpc_admin_port: int = 7400
     frps_admin_port: int = 7500
     xtcp_fallback_timeout_ms: int = 1500
 

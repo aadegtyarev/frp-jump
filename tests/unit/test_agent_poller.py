@@ -833,6 +833,7 @@ def test_disable_device_raises_sync_error_on_failure(monkeypatch) -> None:
 
 
 def _make_keypair(tmp_path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     key_path = tmp_path / "id"
     subprocess.run(
         ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(key_path)],
@@ -851,8 +852,11 @@ def _fake_challenge_response(url: str) -> httpx.Response:
     )
 
 
-def test_set_key_signs_the_challenge_and_posts_the_signature(monkeypatch, tmp_path) -> None:
+def test_set_key_signs_the_challenge_with_both_keys_and_posts_both_signatures(
+    monkeypatch, tmp_path
+) -> None:
     key_path, public_key = _make_keypair(tmp_path)
+    current_key_path, _ = _make_keypair(tmp_path / "current")
     state = _state()
     calls = []
 
@@ -863,17 +867,20 @@ def test_set_key_signs_the_challenge_and_posts_the_signature(monkeypatch, tmp_pa
         return httpx.Response(204, request=httpx.Request("POST", url))
 
     monkeypatch.setattr(poller.httpx, "post", fake_post)
-    poller.set_key(state, key_path, public_key)
+    poller.set_key(state, key_path, public_key, current_identity_path=current_key_path)
 
     assert calls[0][0] == "http://ctl.example.com/api/agent/users/set-key/challenge"
     assert calls[0][1] == {"public_key": public_key}
     assert calls[1][0] == "http://ctl.example.com/api/agent/users/set-key"
     assert calls[1][1]["challenge_id"] == "chal-1"
     assert "signature" in calls[1][1]
+    assert "current_signature" in calls[1][1]
+    assert calls[1][1]["signature"] != calls[1][1]["current_signature"]
 
 
 def test_set_key_raises_sync_error_when_the_challenge_step_fails(monkeypatch, tmp_path) -> None:
     key_path, public_key = _make_keypair(tmp_path)
+    current_key_path, _ = _make_keypair(tmp_path / "current")
     state = _state()
 
     def fake_post(url, *, json, headers, timeout):
@@ -881,11 +888,12 @@ def test_set_key_raises_sync_error_when_the_challenge_step_fails(monkeypatch, tm
 
     monkeypatch.setattr(poller.httpx, "post", fake_post)
     with pytest.raises(poller.SyncError):
-        poller.set_key(state, key_path, public_key)
+        poller.set_key(state, key_path, public_key, current_identity_path=current_key_path)
 
 
 def test_set_key_raises_sync_error_when_the_final_step_fails(monkeypatch, tmp_path) -> None:
     key_path, public_key = _make_keypair(tmp_path)
+    current_key_path, _ = _make_keypair(tmp_path / "current")
     state = _state()
 
     def fake_post(url, *, json, headers, timeout):
@@ -895,7 +903,7 @@ def test_set_key_raises_sync_error_when_the_final_step_fails(monkeypatch, tmp_pa
 
     monkeypatch.setattr(poller.httpx, "post", fake_post)
     with pytest.raises(poller.SyncError):
-        poller.set_key(state, key_path, public_key)
+        poller.set_key(state, key_path, public_key, current_identity_path=current_key_path)
 
 
 def test_is_bindable_reports_a_free_port_as_bindable() -> None:

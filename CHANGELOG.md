@@ -6,6 +6,45 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-09-26
+
+Found by an independent Fable review focused on compromise/blast-radius
+resilience, since this project brokers real network access to controller
+hardware.
+
+### Fixed
+
+- **High: a compromised device could pivot into any sibling device (and
+  its LAN) via frpc's own unauthenticated admin API.** Every client
+  device's frpc enabled a `webServer` (admin API) on `127.0.0.1` with no
+  password, which nothing in this codebase ever read -- but which any
+  other device of the same owner could already reach through a normal
+  `connect`, and use to rewrite that sibling's tunnel config or kill its
+  frpc entirely. Removed: the client side never enables it now (the
+  server side still does, and still needs it, for relayed-traffic
+  visibility).
+- **High: `set-key` let a bearer token from a single compromised device
+  permanently hijack the whole account.** Self-service key rotation only
+  proved possession of the *new* key; a compromised device's own bearer
+  token plus a freshly-generated attacker keypair was enough to repoint
+  the owner's registered key, locking the real owner out for good.
+  `frp-jump-client set-key` now takes a second argument (your *current*
+  private key) and the server requires proof of both before rotating --
+  a breaking CLI change, but a necessary one.
+
+### Added
+
+- **"Ports and firewalls"** section in the README: which ports the
+  server needs open inbound, what the client needs outbound, and how a
+  restrictive firewall affects (but doesn't break) p2p hole-punching.
+
+### Changed
+
+- README and `docs/architecture.md` rewritten for clarity -- shorter
+  paragraphs, and historical/superseded content (a security pass from
+  the pre-0.3.0 WebUI era, an already-fixed concurrent-enrollment race)
+  removed in favor of describing only current behavior.
+
 ## [0.3.3] - 2026-09-26
 
 ### Added

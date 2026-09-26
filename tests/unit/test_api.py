@@ -32,6 +32,7 @@ def _generate_public_key() -> str:
 def _generate_keypair(dir_path: Path) -> tuple[Path, str]:
     """Like `_generate_public_key`, but keeps the private key around too,
     for tests that need to actually sign a challenge with it."""
+    dir_path.mkdir(parents=True, exist_ok=True)
     key_path = dir_path / "id"
     subprocess.run(
         ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(key_path)],
@@ -87,6 +88,25 @@ def _make_admin_and_token(engine, device_name: str = "wb01") -> str:
             db, device_name_hint=device_name, created_by=admin.id, ttl=_TTL
         )
         return issued.token
+
+
+def _make_owner_with_key_and_token(
+    engine, tmp_path: Path, device_name: str = "wb01"
+) -> tuple[str, Path, str]:
+    """Like `_make_admin_and_token`, but for tests that need to sign as
+    the owner too (set-key's `current_signature`) -- `_ADMIN_PUBLIC_KEY`
+    is shared module-wide with its private key discarded, so this makes a
+    one-off owner whose key is retained instead. Returns (enroll_token,
+    owner_private_key_path, owner_id)."""
+    owner_dir = tmp_path / "owner"
+    owner_dir.mkdir(parents=True, exist_ok=True)
+    owner_key_path, owner_public_key = _generate_keypair(owner_dir)
+    with make_session(engine) as db:
+        owner = registry.create_user(db, public_key=owner_public_key)
+        issued = registry.create_enroll_token(
+            db, device_name_hint=device_name, created_by=owner.id, ttl=_TTL
+        )
+        return issued.token, owner_key_path, owner.id
 
 
 def test_version_reports_the_protocol_version(client) -> None:
@@ -682,34 +702,82 @@ def test_enroll_challenge_always_succeeds_even_for_an_unregistered_key(client) -
     assert resp.json()["challenge"]
 
 
-def test_set_key_requires_proof_of_possession_of_the_new_key(client, app_ctx) -> None:
+def test_set_key_requires_proof_of_possession_of_the_new_key(client, app_ctx, tmp_path) -> None:
     """A bearer token alone must not be enough to repoint the account at
     an attacker-chosen key nobody has proven they hold."""
     _app, engine, _ca = app_ctx
-    wb01_token = _make_admin_and_token(engine, "wb01")
+    wb01_token, _owner_key_path, owner_id = _make_owner_with_key_and_token(engine, tmp_path, "wb01")
     wb01 = client.post("/api/agent/enroll", json={"token": wb01_token}).json()
 
     new_public_key = _generate_public_key()
     resp = client.post(
         "/api/agent/users/set-key",
-        json={"challenge_id": "nonexistent", "signature": "bm90IGEgcmVhbCBzaWc="},
+        json={
+            "challenge_id": "nonexistent",
+            "signature": "bm90IGEgcmVhbCBzaWc=",
+            "current_signature": "bm90IGEgcmVhbCBzaWc=",
+        },
         headers=_auth(wb01["api_token"]),
     )
     assert resp.status_code == 400
 
     with make_session(engine) as db:
-        admin = registry.get_user_by_label(db, "admin")
-        assert admin.ssh_public_key.strip() != new_public_key.strip()
+        owner = db.get(registry.User, owner_id)
+        assert owner.ssh_public_key.strip() != new_public_key.strip()
+
+
+def test_set_key_requires_proof_of_possession_of_the_current_key(
+    client, app_ctx, tmp_path
+) -> None:
+    """The new-key signature alone must not be enough either -- a bearer
+    token from one compromised device plus a freshly-generated attacker
+    keypair must not be able to hijack the whole account."""
+    from frp_jump.common import ssh_signing
+
+    _app, engine, _ca = app_ctx
+    wb01_token, _owner_key_path, owner_id = _make_owner_with_key_and_token(engine, tmp_path, "wb01")
+    wb01 = client.post("/api/agent/enroll", json={"token": wb01_token}).json()
+
+    key_path, new_public_key = _generate_keypair(tmp_path / "new")
+    attacker_dir = tmp_path / "attacker"
+    attacker_dir.mkdir()
+    attacker_key_path, _ = _generate_keypair(attacker_dir)
+    challenge_resp = client.post(
+        "/api/agent/users/set-key/challenge",
+        json={"public_key": new_public_key},
+        headers=_auth(wb01["api_token"]),
+    )
+    challenge = challenge_resp.json()
+
+    challenge_bytes = base64.b64decode(challenge["challenge"])
+    signature = ssh_signing.sign(key_path, challenge_bytes)
+    # "current_signature" made with a key that is NOT the account's
+    # actually-registered current key.
+    bogus_current_signature = ssh_signing.sign(attacker_key_path, challenge_bytes)
+    resp = client.post(
+        "/api/agent/users/set-key",
+        json={
+            "challenge_id": challenge["challenge_id"],
+            "signature": base64.b64encode(signature).decode("ascii"),
+            "current_signature": base64.b64encode(bogus_current_signature).decode("ascii"),
+        },
+        headers=_auth(wb01["api_token"]),
+    )
+    assert resp.status_code == 400
+
+    with make_session(engine) as db:
+        owner = db.get(registry.User, owner_id)
+        assert owner.ssh_public_key.strip() != new_public_key.strip()
 
 
 def test_set_key_rotates_the_callers_owner_key(client, app_ctx, tmp_path) -> None:
     from frp_jump.common import ssh_signing
 
     _app, engine, _ca = app_ctx
-    wb01_token = _make_admin_and_token(engine, "wb01")
+    wb01_token, owner_key_path, owner_id = _make_owner_with_key_and_token(engine, tmp_path, "wb01")
     wb01 = client.post("/api/agent/enroll", json={"token": wb01_token}).json()
 
-    key_path, new_public_key = _generate_keypair(tmp_path)
+    key_path, new_public_key = _generate_keypair(tmp_path / "new")
     challenge_resp = client.post(
         "/api/agent/users/set-key/challenge",
         json={"public_key": new_public_key},
@@ -718,20 +786,23 @@ def test_set_key_rotates_the_callers_owner_key(client, app_ctx, tmp_path) -> Non
     assert challenge_resp.status_code == 200
     challenge = challenge_resp.json()
 
-    signature = ssh_signing.sign(key_path, base64.b64decode(challenge["challenge"]))
+    challenge_bytes = base64.b64decode(challenge["challenge"])
+    signature = ssh_signing.sign(key_path, challenge_bytes)
+    current_signature = ssh_signing.sign(owner_key_path, challenge_bytes)
     resp = client.post(
         "/api/agent/users/set-key",
         json={
             "challenge_id": challenge["challenge_id"],
             "signature": base64.b64encode(signature).decode("ascii"),
+            "current_signature": base64.b64encode(current_signature).decode("ascii"),
         },
         headers=_auth(wb01["api_token"]),
     )
     assert resp.status_code == 204
 
     with make_session(engine) as db:
-        admin = registry.get_user_by_label(db, "admin")
-        assert admin.ssh_public_key.strip() == new_public_key.strip()
+        owner = db.get(registry.User, owner_id)
+        assert owner.ssh_public_key.strip() == new_public_key.strip()
 
 
 def test_set_key_rejects_a_signature_from_a_different_key_than_challenged(
@@ -740,10 +811,10 @@ def test_set_key_rejects_a_signature_from_a_different_key_than_challenged(
     from frp_jump.common import ssh_signing
 
     _app, engine, _ca = app_ctx
-    wb01_token = _make_admin_and_token(engine, "wb01")
+    wb01_token, owner_key_path, _owner_id = _make_owner_with_key_and_token(engine, tmp_path, "wb01")
     wb01 = client.post("/api/agent/enroll", json={"token": wb01_token}).json()
 
-    key_path, new_public_key = _generate_keypair(tmp_path)
+    key_path, new_public_key = _generate_keypair(tmp_path / "new")
     other_dir = tmp_path / "other"
     other_dir.mkdir()
     other_key_path, _ = _generate_keypair(other_dir)
@@ -753,20 +824,19 @@ def test_set_key_rejects_a_signature_from_a_different_key_than_challenged(
         headers=_auth(wb01["api_token"]),
     )
     challenge = challenge_resp.json()
+    challenge_bytes = base64.b64decode(challenge["challenge"])
 
     # Signed with a DIFFERENT key than the one the challenge was issued
     # for -- must not rotate to the challenged key regardless.
-    signature = ssh_signing.sign(other_key_path, base64.b64decode(challenge["challenge"]))
+    signature = ssh_signing.sign(other_key_path, challenge_bytes)
+    current_signature = ssh_signing.sign(owner_key_path, challenge_bytes)
     resp = client.post(
         "/api/agent/users/set-key",
         json={
             "challenge_id": challenge["challenge_id"],
             "signature": base64.b64encode(signature).decode("ascii"),
+            "current_signature": base64.b64encode(current_signature).decode("ascii"),
         },
         headers=_auth(wb01["api_token"]),
     )
     assert resp.status_code == 400
-
-    with make_session(engine) as db:
-        admin = registry.get_user_by_label(db, "admin")
-        assert admin.ssh_public_key.strip() != new_public_key.strip()

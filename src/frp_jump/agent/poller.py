@@ -239,13 +239,16 @@ def set_key(
     identity_path: Path,
     public_key: str,
     *,
+    current_identity_path: Path,
     timeout: float = _HTTP_TIMEOUT_SECONDS,
 ) -> None:
     """`client set-key`: rotate this device's owner's SSH key to
-    ``public_key``, proving possession of its private half
-    (``identity_path``) via a signed challenge -- a bearer token alone
-    must not be enough to repoint the account at a key nobody actually
-    holds."""
+    ``public_key``. Proves possession of both the new key's private half
+    (``identity_path``) and the account's *current* key
+    (``current_identity_path``) over the same server-issued challenge --
+    a bearer token from one device alone must not be enough to repoint
+    the account at a new key, or every other device could be permanently
+    locked out by whoever compromised just this one."""
     try:
         resp = httpx.post(
             f"{state.control_url}{AGENT_API_PREFIX}/users/set-key/challenge",
@@ -258,11 +261,18 @@ def set_key(
     if resp.status_code != 200:
         raise SyncError(f"set-key failed ({resp.status_code}): {resp.text}")
     challenge = resp.json()
+    challenge_bytes = base64.b64decode(challenge["challenge"])
 
     try:
-        signature = ssh_signing.sign(identity_path, base64.b64decode(challenge["challenge"]))
+        signature = ssh_signing.sign(identity_path, challenge_bytes)
     except ssh_signing.SshSigningError as exc:
         raise SyncError(f"could not sign the challenge with {identity_path}: {exc}") from exc
+    try:
+        current_signature = ssh_signing.sign(current_identity_path, challenge_bytes)
+    except ssh_signing.SshSigningError as exc:
+        raise SyncError(
+            f"could not sign the challenge with {current_identity_path}: {exc}"
+        ) from exc
 
     try:
         resp = httpx.post(
@@ -270,6 +280,7 @@ def set_key(
             json={
                 "challenge_id": challenge["challenge_id"],
                 "signature": base64.b64encode(signature).decode("ascii"),
+                "current_signature": base64.b64encode(current_signature).decode("ascii"),
             },
             headers=_auth_headers(state),
             timeout=timeout,

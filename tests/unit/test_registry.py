@@ -17,6 +17,7 @@ _KEY_COUNTER = itertools.count()
 
 
 def _make_keypair(tmp_path: Path) -> tuple[Path, str]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     key_path = tmp_path / f"id-{next(_KEY_COUNTER)}"
     subprocess.run(
         ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(key_path)],
@@ -485,16 +486,21 @@ def test_delete_device_after_it_called_set_key_does_not_crash(db_session, tmp_pa
     -- a device that ever redeemed (or even just started) a set-key
     challenge used to leave a dangling row and turn a later delete into
     an IntegrityError instead of a clean delete."""
-    admin = _make_user(db_session)
+    admin, current_key_path = _make_user_with_key(db_session, tmp_path / "current")
     laptop = _enroll(db_session, admin, "laptop")
-    new_key_path, new_public_key = _make_keypair(tmp_path)
+    new_key_path, new_public_key = _make_keypair(tmp_path / "new")
 
     challenge = registry.create_key_rotation_challenge(
         db_session, device_id=laptop.device.id, public_key=new_public_key, ttl=_TTL
     )
     signature_b64 = _sign_challenge(new_key_path, challenge.challenge)
+    current_signature_b64 = _sign_challenge(current_key_path, challenge.challenge)
     registry.redeem_key_rotation_challenge(
-        db_session, challenge.id, signature_b64, device_id=laptop.device.id
+        db_session,
+        challenge.id,
+        signature_b64,
+        current_signature_b64=current_signature_b64,
+        device_id=laptop.device.id,
     )
 
     registry.delete_device(db_session, laptop.device.id)

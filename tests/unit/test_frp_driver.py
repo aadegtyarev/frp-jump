@@ -29,7 +29,6 @@ def _make_driver(tmp_path, supervisor: FakeSupervisor) -> FrpDriver:
     return FrpDriver(
         binary=Path("/opt/frp/frpc"),
         state_dir=tmp_path,
-        admin_port=_ADMIN_PORT,
         fallback_timeout_ms=_FALLBACK_TIMEOUT_MS,
         supervisor=supervisor,
     )
@@ -143,7 +142,6 @@ def test_apply_uses_configured_fallback_timeout(tmp_path) -> None:
     driver = FrpDriver(
         binary=Path("/opt/frp/frpc"),
         state_dir=tmp_path,
-        admin_port=_ADMIN_PORT,
         fallback_timeout_ms=750,
         supervisor=supervisor,
     )

@@ -5,13 +5,14 @@ restarting the process — frp does have a hot-reload admin API, but a full
 restart is simpler and correct, and grants change rarely enough (an admin
 action, not a hot path) that the brief reconnect blip does not matter here.
 
-Known limitation: frpc's admin API (``/api/status``) reports proxy status
-on the exposing side, but does not expose whether a given *visitor*
-actually ended up peer-to-peer or fell back to relay — there is no
-``/api/visitor-status`` route (checked against fatedier/frp's
-``client/api_router.go``, dev branch). So ``status()`` reports per-grant
-state as ``UNKNOWN`` for now; see docs/architecture.md for how to improve
-this later (e.g. tailing frpc's log for hole-punch/fallback messages).
+``FrpDriver`` (the client side) never enables frpc's own ``webServer``
+(admin API) -- it has no authentication of its own, and every device of
+the same owner can already reach any of another device's `127.0.0.1`
+ports via a normal grant, which would turn an unauthenticated admin API
+into a free remote-config channel between devices. ``status()`` therefore
+reports per-grant state as ``UNKNOWN`` rather than querying it; see
+docs/architecture.md for what a future improvement here would need
+(e.g. tailing frpc's log for hole-punch/fallback messages instead).
 
 Traffic accounting (see ``fetch_proxy_traffic``) has the mirror-image
 limitation, verified by reading fatedier/frp's own source
@@ -106,14 +107,12 @@ class FrpDriver:
         *,
         binary: Path,
         state_dir: Path,
-        admin_port: int,
         fallback_timeout_ms: int,
         supervisor: ProcessSupervisor | None = None,
     ) -> None:
         self._binary = binary
         self._config_path = state_dir / "frpc.toml"
         self._tls_dir = state_dir / "tls"
-        self._admin_port = admin_port
         self._fallback_timeout_ms = fallback_timeout_ms
         self._supervisor = supervisor or SubprocessSupervisor()
         self._fingerprint: str | None = None
@@ -127,7 +126,12 @@ class FrpDriver:
             ca_file=ca_file,
             fallback_timeout_ms=self._fallback_timeout_ms,
         )
-        config["webServer"] = {"addr": "127.0.0.1", "port": self._admin_port}
+        # Deliberately no webServer/admin API here: frpc's admin API has no
+        # auth of its own and nothing in this codebase ever reads it (unlike
+        # frps's, which fetch_proxy_traffic below does use) -- enabling it
+        # would only be a free, unauthenticated remote-config surface on
+        # every device, reachable by any other device of the same owner
+        # that can already reach 127.0.0.1:<this port> via a normal grant.
 
         fingerprint = _fingerprint(config)
         if fingerprint == self._fingerprint and self._supervisor.is_running():

@@ -174,11 +174,26 @@ def create_key_rotation_challenge(
 
 
 def redeem_key_rotation_challenge(
-    session: Session, challenge_id: str, signature_b64: str, *, device_id: str
+    session: Session,
+    challenge_id: str,
+    signature_b64: str,
+    *,
+    current_signature_b64: str,
+    device_id: str,
 ) -> User:
-    """Step 2: verify the signature over the challenge was made by the
-    new key's private half, then actually rotate -- the key-rotation
-    counterpart to ``redeem_enroll_challenge``."""
+    """Step 2: verify the challenge was signed by *both* the new key
+    (``signature_b64``) and the owner's currently-registered key
+    (``current_signature_b64``), then actually rotate -- the key-rotation
+    counterpart to ``redeem_enroll_challenge``.
+
+    A bearer token alone (i.e. one compromised device) must not be enough
+    to hijack the whole account -- that would let a single compromised
+    device permanently lock the real owner out and keep every other
+    device. Requiring proof of the *current* key too means the caller
+    needs the owner's actual private key, not just a device it happens to
+    be running on. Losing the current key entirely is a separate,
+    deliberately admin-only recovery path (`frp-jump-server users
+    set-key`, an operator with shell access -- trusted by construction)."""
     claimed = session.execute(
         sa_update(KeyRotationChallenge)
         .where(
@@ -194,8 +209,12 @@ def redeem_key_rotation_challenge(
         raise NotFoundError("unknown, used, or expired challenge")
     record = session.get(KeyRotationChallenge, challenge_id)
 
+    device = session.get(Device, device_id)
+    user = session.get(User, device.owner_user_id)
+
     try:
         signature = base64.b64decode(signature_b64, validate=True)
+        current_signature = base64.b64decode(current_signature_b64, validate=True)
         challenge_bytes = base64.b64decode(record.challenge, validate=True)
     except (ValueError, binascii.Error) as exc:
         session.rollback()
@@ -203,8 +222,10 @@ def redeem_key_rotation_challenge(
     if not ssh_signing.verify(record.public_key, challenge_bytes, signature):
         session.rollback()
         raise ValidationError("signature verification failed")
+    if not ssh_signing.verify(user.ssh_public_key, challenge_bytes, current_signature):
+        session.rollback()
+        raise ValidationError("current-key signature verification failed")
 
-    device = session.get(Device, device_id)
     return set_user_key(session, device.owner_user_id, public_key=record.public_key)
 
 

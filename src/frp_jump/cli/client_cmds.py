@@ -17,6 +17,7 @@ from rich.table import Table
 from frp_jump.agent import enroll as enroll_mod
 from frp_jump.agent import hosts, poller, service_install
 from frp_jump.agent.state import Profile, load, request_wake, save
+from frp_jump.common.api import PROTOCOL_VERSION
 from frp_jump.common.settings import Settings
 from frp_jump.driver.base import ServiceProtocol
 from frp_jump.driver.frp.binaries import ensure_installed
@@ -386,6 +387,15 @@ def set_key_cmd(
 @app.command("run")
 def run_cmd(
     agent_version: str = typer.Option(_AGENT_VERSION, help="Reported to the server on heartbeats."),
+    poll_interval: float | None = typer.Option(
+        None,
+        "--poll-interval",
+        help="Seconds between desired-state polls, overriding "
+        "agent_poll_interval_seconds (default 2s) for this run only. The "
+        "device that calls `connect`/`disconnect` applies its own change "
+        "almost immediately regardless -- this only bounds how long the "
+        "*other* device in that pair takes to notice.",
+    ),
 ) -> None:
     """Run the agent loop in the foreground: heartbeat, pull desired state,
     apply it to the local frpc process and ~/.ssh/config, repeat.
@@ -394,24 +404,26 @@ def run_cmd(
     day-to-day -- but running it in a terminal is the easiest way to watch
     what it's doing while setting things up.
 
-    Example:
+    Examples:
 
         frp-jump-client run
+
+        frp-jump-client run --poll-interval 10
     """
     settings = Settings()
     state = _require_state(settings)
     driver = _make_driver_with_retry(settings)
+    interval = poll_interval if poll_interval is not None else settings.agent_poll_interval_seconds
 
     console.print(
-        f"[green]agent running[/green] as {state.device_name}, "
-        f"polling every {settings.agent_poll_interval_seconds}s"
+        f"[green]agent running[/green] as {state.device_name}, polling every {interval}s"
     )
     poller.run_forever(
         state,
         driver,
         data_dir=settings.data_dir,
         ssh_config_path=_ssh_config_path(settings),
-        poll_interval_seconds=settings.agent_poll_interval_seconds,
+        poll_interval_seconds=interval,
         port_range=_port_range(settings),
         agent_version=agent_version,
     )
@@ -496,6 +508,25 @@ def doctor_cmd() -> None:
         console.print("[green]✓[/green] server reachable, heartbeat accepted")
     except poller.SyncError as exc:
         console.print(f"[red]✗[/red] server heartbeat failed: {exc}")
+        ok = False
+
+    try:
+        server_info = poller.fetch_server_version(state)
+        server_protocol = server_info.get("protocol_version")
+        if server_protocol == PROTOCOL_VERSION:
+            console.print(
+                f"[green]✓[/green] protocol compatible (v{PROTOCOL_VERSION}, "
+                f"server {server_info.get('package_version', '?')})"
+            )
+        else:
+            console.print(
+                f"[red]✗[/red] protocol mismatch: server speaks v{server_protocol!r} "
+                f"(package {server_info.get('package_version', '?')}), this client speaks "
+                f"v{PROTOCOL_VERSION} -- upgrade whichever side is behind"
+            )
+            ok = False
+    except poller.SyncError as exc:
+        console.print(f"[yellow]✗[/yellow] could not check server version: {exc}")
         ok = False
 
     if not ok:

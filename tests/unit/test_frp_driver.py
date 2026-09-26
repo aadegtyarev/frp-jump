@@ -84,6 +84,22 @@ def test_apply_is_idempotent_when_desired_state_is_unchanged(tmp_path) -> None:
     assert len(supervisor.start_calls) == 1
 
 
+def test_apply_does_not_rewrite_unchanged_tls_files(tmp_path) -> None:
+    """Regression test: `_write_tls_files` used to run unconditionally on
+    every `apply()` call, before the fingerprint-based restart check --
+    rewriting identical bytes on every poll cycle burns an embedded
+    device's finite flash write budget for nothing."""
+    supervisor = FakeSupervisor()
+    driver = _make_driver(tmp_path, supervisor)
+    desired = _desired()
+    driver.apply(desired)
+    mtime_before = (tmp_path / "tls" / "tls.crt").stat().st_mtime_ns
+
+    driver.apply(desired)
+
+    assert (tmp_path / "tls" / "tls.crt").stat().st_mtime_ns == mtime_before
+
+
 def test_apply_restarts_when_desired_state_changes(tmp_path) -> None:
     supervisor = FakeSupervisor()
     driver = _make_driver(tmp_path, supervisor)

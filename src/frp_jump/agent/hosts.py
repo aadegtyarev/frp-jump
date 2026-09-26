@@ -45,7 +45,12 @@ def render_ssh_config(entries: list[tuple[str, int]]) -> str:
 def write_ssh_config(data_dir: Path, entries: list[tuple[str, int]]) -> Path:
     path = managed_config_path(data_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_ssh_config(entries))
+    rendered = render_ssh_config(entries)
+    # Skip the write when nothing changed -- this runs every poll cycle
+    # (as often as every couple of seconds), and an embedded device's
+    # flash has a finite write budget not worth spending on identical bytes.
+    if not path.is_file() or path.read_text() != rendered:
+        path.write_text(rendered)
     return path
 
 

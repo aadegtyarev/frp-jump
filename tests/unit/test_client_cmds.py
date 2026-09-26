@@ -481,6 +481,78 @@ def test_set_key_rejects_an_empty_pub_file(tmp_path):
     assert "empty" in result.output
 
 
+def test_doctor_reports_a_compatible_protocol_version(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    monkeypatch.setattr(client_cmds.poller, "send_heartbeat", lambda state, agent_version: None)
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "frpc").touch()
+    monkeypatch.setattr(
+        client_cmds.poller,
+        "fetch_server_version",
+        lambda state: {
+            "protocol_version": client_cmds.PROTOCOL_VERSION,
+            "package_version": "0.3.3",
+        },
+    )
+
+    result = runner.invoke(client_cmds.app, ["doctor"])
+
+    assert result.exit_code == 0, result.output
+    assert "protocol compatible" in result.output
+
+
+def test_doctor_reports_a_protocol_mismatch(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    monkeypatch.setattr(client_cmds.poller, "send_heartbeat", lambda state, agent_version: None)
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "frpc").touch()
+    monkeypatch.setattr(
+        client_cmds.poller,
+        "fetch_server_version",
+        lambda state: {
+            "protocol_version": client_cmds.PROTOCOL_VERSION + 1,
+            "package_version": "9.9.9",
+        },
+    )
+
+    result = runner.invoke(client_cmds.app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert "protocol mismatch" in result.output
+
+
+def test_run_uses_the_default_poll_interval_when_not_overridden(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    monkeypatch.setattr(client_cmds, "_make_driver_with_retry", lambda settings: object())
+    captured = {}
+    monkeypatch.setattr(
+        client_cmds.poller,
+        "run_forever",
+        lambda state, driver, **kwargs: captured.update(kwargs),
+    )
+
+    result = runner.invoke(client_cmds.app, ["run"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["poll_interval_seconds"] == client_cmds.Settings().agent_poll_interval_seconds
+
+
+def test_run_poll_interval_overrides_the_default(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    monkeypatch.setattr(client_cmds, "_make_driver_with_retry", lambda settings: object())
+    captured = {}
+    monkeypatch.setattr(
+        client_cmds.poller,
+        "run_forever",
+        lambda state, driver, **kwargs: captured.update(kwargs),
+    )
+
+    result = runner.invoke(client_cmds.app, ["run", "--poll-interval", "5"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["poll_interval_seconds"] == 5.0
+
+
 def test_commands_require_enrollment_first(tmp_path):
     commands = (
         ["devices", "list"],

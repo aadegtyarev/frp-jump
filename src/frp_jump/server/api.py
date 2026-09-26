@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -18,11 +20,32 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session as DbSession
 
 from frp_jump.common import ssh_signing
+from frp_jump.common.api import PROTOCOL_VERSION
 from frp_jump.common.models import Device
 from frp_jump.driver.base import ServiceProtocol
 from frp_jump.server import registry
 
 router = APIRouter()
+
+try:
+    _PACKAGE_VERSION = _pkg_version("frp-jump")
+except PackageNotFoundError:
+    _PACKAGE_VERSION = "dev"
+
+
+class VersionResponse(BaseModel):
+    protocol_version: int
+    package_version: str
+
+
+@router.get("/version", response_model=VersionResponse)
+def version() -> VersionResponse:
+    """Unauthenticated, reachable before enrolling -- lets a client sanity-
+    check it's actually talking to an frp-jump server, and at what
+    protocol version, before doing anything else (`client doctor`/
+    `enroll` use this). See ``common/api.PROTOCOL_VERSION``'s docstring
+    for what this number means and doesn't."""
+    return VersionResponse(protocol_version=PROTOCOL_VERSION, package_version=_PACKAGE_VERSION)
 
 
 def get_db(request: Request) -> DbSession:
@@ -82,6 +105,7 @@ class EnrollResponse(BaseModel):
     ca_cert_pem: str
     server_addr: str
     server_port: int
+    protocol_version: int = PROTOCOL_VERSION
 
 
 @router.post("/enroll", response_model=EnrollResponse)
@@ -256,6 +280,7 @@ class DesiredStateResponse(BaseModel):
     server_port: int
     exposed: list[ExposedGrantOut]
     consumed: list[ConsumedGrantOut]
+    protocol_version: int = PROTOCOL_VERSION
 
 
 @router.get("/desired-state", response_model=DesiredStateResponse)

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from frp_jump.common.api import PROTOCOL_VERSION
 from frp_jump.common.pki import CertificateAuthority
 from frp_jump.common.settings import Settings
 from frp_jump.driver.base import ServiceProtocol
@@ -88,6 +89,14 @@ def _make_admin_and_token(engine, device_name: str = "wb01") -> str:
         return issued.token
 
 
+def test_version_reports_the_protocol_version(client) -> None:
+    resp = client.get("/api/agent/version")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["protocol_version"] == PROTOCOL_VERSION
+    assert body["package_version"]
+
+
 def test_enroll_with_valid_token_returns_cert_material(client, app_ctx) -> None:
     _app, engine, ca = app_ctx
     token = _make_admin_and_token(engine)
@@ -100,6 +109,7 @@ def test_enroll_with_valid_token_returns_cert_material(client, app_ctx) -> None:
     assert body["server_addr"] == "relay.example.com"
     assert body["server_port"] == 7000
     assert body["api_token"]
+    assert body["protocol_version"] == PROTOCOL_VERSION
 
 
 def test_enroll_with_unknown_token_is_rejected(client) -> None:
@@ -174,6 +184,7 @@ def test_desired_state_reports_exposed_and_consumed_grants(client, app_ctx) -> N
     assert exposer_state["exposed"][0]["service_name"] == "wb01-ssh"
     assert exposer_state["exposed"][0]["target_port"] == 22
     assert exposer_state["consumed"] == []
+    assert exposer_state["protocol_version"] == PROTOCOL_VERSION
 
     consumer_state = client.get(
         "/api/agent/desired-state",

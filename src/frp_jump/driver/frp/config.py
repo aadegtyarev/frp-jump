@@ -8,6 +8,19 @@ visitors on the consuming side, wired together with ``fallbackTo`` /
 ``fallbackTimeoutMs`` — p2p first, transparent relay fallback if hole
 punching does not complete in time. This is a native frp behavior, not
 something we implement ourselves.
+
+Every proxy/visitor also sets its own ``transport.useEncryption`` -- not
+to be confused with the frpc-wide ``transport.tls`` block below, which
+only ever covers the frpc<->frps control/relay connection. Once an xtcp
+grant actually punches through (real peer-to-peer), its data connection
+goes directly between the two frpc processes and never touches frps or
+that TLS listener at all -- `useEncryption` (verified against frp's own
+source, ``client/visitor/visitor.go``'s ``WithEncryption(rwc,
+[]byte(cfg.SecretKey))``, gated on this exact flag, default off) is the
+only thing that encrypts that leg. Off by default in frp itself; we turn
+it on for every proxy/visitor so a plain-tcp grant (a web UI, MQTT,
+anything without its own encryption -- unlike ssh, which encrypts itself
+regardless) that ends up genuinely p2p isn't silently sent in the clear.
 """
 
 from __future__ import annotations
@@ -47,6 +60,14 @@ def _tls_block(*, cert_file: str, key_file: str, ca_file: str) -> dict:
     }
 
 
+def _encrypted() -> dict:
+    """Every proxy/visitor gets this -- see the module docstring for why.
+    A fresh dict per call, not a shared module-level constant, so nothing
+    downstream can accidentally mutate a value every proxy/visitor shares.
+    """
+    return {"transport": {"useEncryption": True}}
+
+
 def build_frpc_config(
     desired: DesiredState,
     *,
@@ -66,6 +87,7 @@ def build_frpc_config(
                 "localIP": "127.0.0.1",
                 "localPort": exposed.local_port,
                 "allowUsers": ["*"],
+                **_encrypted(),
             }
         )
         proxies.append(
@@ -76,6 +98,7 @@ def build_frpc_config(
                 "localIP": "127.0.0.1",
                 "localPort": exposed.local_port,
                 "allowUsers": ["*"],
+                **_encrypted(),
             }
         )
 
@@ -89,6 +112,7 @@ def build_frpc_config(
                 "serverName": stcp_proxy_name(consumed.grant_id),
                 "secretKey": consumed.secret,
                 "bindPort": -1,
+                **_encrypted(),
             }
         )
         visitors.append(
@@ -101,6 +125,7 @@ def build_frpc_config(
                 "bindPort": consumed.local_bind_port,
                 "fallbackTo": stcp_name,
                 "fallbackTimeoutMs": fallback_timeout_ms,
+                **_encrypted(),
             }
         )
 

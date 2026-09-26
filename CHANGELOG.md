@@ -6,6 +6,39 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-26
+
+### Added
+
+- **Protocol version reporting**: an unauthenticated `GET /version` route
+  on the server, and a matching `frp-jump-client doctor` check, so a
+  client and server that fall out of sync (a breaking wire-protocol
+  change down the line) detect the mismatch explicitly instead of
+  misbehaving. On a mismatch the agent skips applying that cycle's
+  desired state entirely (leaves any running tunnel untouched) and keeps
+  retrying via the existing backoff loop -- it never tears down a
+  working connection or crashes over a version skew.
+- **apt repository**: a signed apt repo, published to GitHub Pages on
+  every release, as an alternative to `pip install` -- see "Installing
+  the CLI" in the README. Individual `.deb` downloads from GitHub
+  Releases remain available as a fallback.
+- **`--poll-interval`**: `frp-jump-client run --poll-interval SECONDS`
+  overrides `agent_poll_interval_seconds` (now defaulting to 2s, down
+  from 30s) for one run without touching persisted config.
+
+### Changed
+
+- **p2p/relay tunnel payloads are now encrypted** (`transport.useEncryption`
+  on every xtcp/stcp proxy and visitor). Previously only the frpc<->frps
+  control channel used mTLS; the actual tunneled traffic between two
+  devices (p2p or relayed) went over the wire unencrypted unless the
+  tunneled protocol encrypted itself (e.g. already-TLS'd traffic).
+- Files rewritten on every poll cycle (TLS certs, the managed
+  `~/.ssh/config` block, frpc/frps TOML configs) are now skipped when
+  their content hasn't actually changed, to avoid unnecessary flash
+  writes on embedded devices now that polling is 15x more frequent by
+  default.
+
 ## [0.3.2] - 2026-09-26
 
 Found by a second, broader independent review (security + module/class

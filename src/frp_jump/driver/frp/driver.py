@@ -71,6 +71,20 @@ def fetch_proxy_traffic(
     return body.get("todayTrafficIn", 0), body.get("todayTrafficOut", 0)
 
 
+def _write_if_changed(path: Path, data: bytes, *, restrictive: bool = False) -> None:
+    """Skip the write entirely when the content on disk already matches --
+    ``apply()`` calls this every poll cycle (default every few seconds)
+    regardless of whether anything actually changed, and an embedded
+    device's flash has a finite write budget worth not burning on
+    rewriting identical bytes."""
+    if path.is_file() and path.read_bytes() == data:
+        return
+    if restrictive:
+        write_private_key(path, data)
+    else:
+        path.write_bytes(data)
+
+
 def _write_tls_files(
     tls_dir: Path, desired_or_relay: DesiredState | RelayState
 ) -> tuple[str, str, str]:
@@ -78,9 +92,9 @@ def _write_tls_files(
     cert_file = tls_dir / "tls.crt"
     key_file = tls_dir / "tls.key"
     ca_file = tls_dir / "ca.crt"
-    cert_file.write_bytes(desired_or_relay.cert_pem)
-    write_private_key(key_file, desired_or_relay.key_pem)
-    ca_file.write_bytes(desired_or_relay.ca_cert_pem)
+    _write_if_changed(cert_file, desired_or_relay.cert_pem)
+    _write_if_changed(key_file, desired_or_relay.key_pem, restrictive=True)
+    _write_if_changed(ca_file, desired_or_relay.ca_cert_pem)
     return str(cert_file), str(key_file), str(ca_file)
 
 

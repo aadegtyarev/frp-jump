@@ -16,7 +16,7 @@ import httpx
 from frp_jump.agent import hosts
 from frp_jump.agent.state import AgentState, load, save, wake_path
 from frp_jump.common import ssh_signing
-from frp_jump.common.api import AGENT_API_PREFIX
+from frp_jump.common.api import AGENT_API_PREFIX, PROTOCOL_VERSION
 from frp_jump.driver.base import (
     ConsumedGrant,
     DesiredState,
@@ -54,6 +54,16 @@ class NotConnectedError(SyncError):
     the desired end state (not connected) is already reached, so this is
     safe for a caller to treat as success (e.g. prune local state anyway)
     rather than as a real failure, unlike other `SyncError`s."""
+
+
+class ProtocolMismatchError(SyncError):
+    """The server speaks a different wire protocol version than this
+    client does (see ``common/api.PROTOCOL_VERSION``). Applying its
+    response anyway risks a crash from an unrecognized shape, or worse,
+    silently misapplying a change -- safer to leave whatever tunnel is
+    already running alone and keep retrying (``run_forever``'s existing
+    backoff handles this the same as any other `SyncError`) until
+    whichever side is behind gets upgraded, than to guess."""
 
 
 def is_bindable(port: int) -> bool:
@@ -94,6 +104,31 @@ def fetch_desired_state(state: AgentState, *, timeout: float = _HTTP_TIMEOUT_SEC
         raise SyncError(f"could not reach {state.control_url}: {exc}") from exc
     if resp.status_code != 200:
         raise SyncError(f"desired-state fetch failed ({resp.status_code}): {resp.text}")
+    body = resp.json()
+    server_version = body.get("protocol_version")
+    if server_version != PROTOCOL_VERSION:
+        raise ProtocolMismatchError(
+            f"server speaks protocol v{server_version!r}, this client speaks "
+            f"v{PROTOCOL_VERSION} -- upgrade whichever side is behind "
+            "(`pip install --upgrade frp-jump` on both, usually). Not "
+            "applying anything until they match."
+        )
+    return body
+
+
+def fetch_server_version(
+    state: AgentState, *, timeout: float = _HTTP_TIMEOUT_SECONDS
+) -> dict:
+    """`client doctor`'s own explicit version check -- ``fetch_desired_state``
+    already enforces this on every poll cycle, but this is a cheap,
+    unauthenticated, standalone way to ask "what does the server think it
+    speaks" without needing to be enrolled at all."""
+    try:
+        resp = httpx.get(f"{state.control_url}{AGENT_API_PREFIX}/version", timeout=timeout)
+    except httpx.HTTPError as exc:
+        raise SyncError(f"could not reach {state.control_url}: {exc}") from exc
+    if resp.status_code != 200:
+        raise SyncError(f"version check failed ({resp.status_code}): {resp.text}")
     return resp.json()
 
 

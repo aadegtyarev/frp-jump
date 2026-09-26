@@ -58,7 +58,13 @@ class Settings(BaseSettings):
     xtcp_fallback_timeout_ms: int = 1500
 
     # agent
-    agent_poll_interval_seconds: float = 30.0
+    # How often `client run` polls for desired-state changes. The side
+    # that calls `connect`/`disconnect` applies its own change almost
+    # immediately regardless (see agent/state.py's wake-file mechanism),
+    # but the *other* device in that pair only notices on its own next
+    # poll -- this interval bounds that. Also overridable per invocation
+    # via `client run --poll-interval`.
+    agent_poll_interval_seconds: float = 2.0
     # Consumed-grant local bind ports come from this range, not the kernel's
     # ephemeral port range -- picking from the ephemeral range risks the OS
     # handing out the same port for an unrelated outbound connection later.

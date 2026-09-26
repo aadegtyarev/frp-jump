@@ -71,13 +71,63 @@ def test_send_heartbeat_raises_sync_error_on_non_204(monkeypatch) -> None:
 
 def test_fetch_desired_state_returns_parsed_json(monkeypatch) -> None:
     state = _state()
-    payload = {"exposed": [], "consumed": []}
+    payload = {"exposed": [], "consumed": [], "protocol_version": poller.PROTOCOL_VERSION}
 
     def fake_get(url, *, headers, timeout):
         return httpx.Response(200, json=payload, request=httpx.Request("GET", url))
 
     monkeypatch.setattr(poller.httpx, "get", fake_get)
     assert poller.fetch_desired_state(state) == payload
+
+
+def test_fetch_desired_state_raises_on_a_protocol_mismatch(monkeypatch) -> None:
+    state = _state()
+
+    def fake_get(url, *, headers, timeout):
+        payload = {"exposed": [], "consumed": [], "protocol_version": poller.PROTOCOL_VERSION + 1}
+        return httpx.Response(200, json=payload, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(poller.httpx, "get", fake_get)
+    with pytest.raises(poller.ProtocolMismatchError):
+        poller.fetch_desired_state(state)
+
+
+def test_fetch_desired_state_raises_on_a_missing_protocol_version(monkeypatch) -> None:
+    """An older server (predating this field entirely) must be treated the
+    same as a real mismatch, not silently trusted."""
+    state = _state()
+
+    def fake_get(url, *, headers, timeout):
+        return httpx.Response(
+            200, json={"exposed": [], "consumed": []}, request=httpx.Request("GET", url)
+        )
+
+    monkeypatch.setattr(poller.httpx, "get", fake_get)
+    with pytest.raises(poller.ProtocolMismatchError):
+        poller.fetch_desired_state(state)
+
+
+def test_fetch_server_version_returns_parsed_json(monkeypatch) -> None:
+    state = _state()
+    payload = {"protocol_version": 1, "package_version": "0.3.3"}
+
+    def fake_get(url, *, timeout):
+        assert url == "http://ctl.example.com/api/agent/version"
+        return httpx.Response(200, json=payload, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(poller.httpx, "get", fake_get)
+    assert poller.fetch_server_version(state) == payload
+
+
+def test_fetch_server_version_raises_sync_error_on_failure(monkeypatch) -> None:
+    state = _state()
+
+    def fake_get(url, *, timeout):
+        return httpx.Response(500, text="boom", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(poller.httpx, "get", fake_get)
+    with pytest.raises(poller.SyncError):
+        poller.fetch_server_version(state)
 
 
 def test_fetch_desired_state_raises_sync_error_on_failure(monkeypatch) -> None:
@@ -320,7 +370,9 @@ def test_sync_once_runs_the_full_cycle(tmp_path, monkeypatch) -> None:
 
     def fake_get(url, *, headers, timeout):
         return httpx.Response(
-            200, json={"exposed": [], "consumed": []}, request=httpx.Request("GET", url)
+            200,
+            json={"exposed": [], "consumed": [], "protocol_version": poller.PROTOCOL_VERSION},
+            request=httpx.Request("GET", url),
         )
 
     monkeypatch.setattr(poller.httpx, "post", fake_post)
@@ -672,6 +724,7 @@ def test_sync_once_does_not_clobber_a_profile_added_by_a_concurrent_cli_command(
                     "target_port": 22,
                 }
             ],
+            "protocol_version": poller.PROTOCOL_VERSION,
         }
         return httpx.Response(200, json=remote, request=httpx.Request("GET", url))
 
@@ -725,6 +778,7 @@ def test_sync_once_does_not_clobber_a_local_port_pinned_by_a_concurrent_cli_comm
                     "target_port": 22,
                 }
             ],
+            "protocol_version": poller.PROTOCOL_VERSION,
         }
         return httpx.Response(200, json=remote, request=httpx.Request("GET", url))
 

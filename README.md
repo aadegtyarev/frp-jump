@@ -30,6 +30,12 @@ through your server.
 
 ## Installing the CLI
 
+Two supported ways to install, plus a manual fallback. Either one gets you
+the same `frp-jump-client`/`frp-jump-server` CLIs; pick whichever fits how
+you manage the box.
+
+### Option A: pip
+
 Published on PyPI as [`frp-jump`](https://pypi.org/project/frp-jump/),
 Python 3.12+ required (already present on any recent Debian/Ubuntu,
 including Wiren Board controllers). It splits into two lean pieces sharing
@@ -49,6 +55,42 @@ python3 -m venv .venv    # needs the venv module: on Debian/Ubuntu that's
 ```
 
 Put `.venv/bin` on `PATH`, or call the binaries by their full path.
+
+### Option B: apt repository (Debian/Ubuntu, including Wiren Board)
+
+A self-contained `.deb` (own Python 3.12 runtime under
+`/opt/frp-jump-client`, no venv/pip involved) via a signed apt repo hosted
+on GitHub Pages — add it once, then `apt upgrade` picks up new releases
+like any other package:
+
+```sh
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://aadegtyarev.github.io/frp-jump/frp-jump-archive-keyring.asc \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/frp-jump.gpg
+echo "deb [signed-by=/etc/apt/keyrings/frp-jump.gpg] https://aadegtyarev.github.io/frp-jump stable main" \
+  | sudo tee /etc/apt/sources.list.d/frp-jump.list
+
+sudo apt update
+sudo apt install frp-jump-client   # or frp-jump-server, on the relay box
+```
+
+Only `frp-jump-client` is packaged as a `.deb` today (the server side is
+meant to run from a venv via pip, per "Quick start" below).
+
+### Fallback: download a `.deb` directly
+
+Each [GitHub Release](https://github.com/aadegtyarev/frp-jump/releases)
+also attaches the `.deb` for each architecture (amd64/arm64/armhf)
+individually — useful for an air-gapped box, or if you'd rather not add
+the apt repo:
+
+```sh
+wget https://github.com/aadegtyarev/frp-jump/releases/download/vX.Y.Z/frp-jump-client_X.Y.Z_arm64.deb
+sudo apt install ./frp-jump-client_X.Y.Z_arm64.deb
+```
+
+You're then on your own for upgrades (repeat the download for each new
+version) — Option B does this automatically.
 
 Every command has full `--help` text with runnable examples — start there
 if anything below is unclear (`frp-jump-client <command> --help`).

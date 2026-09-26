@@ -98,3 +98,44 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist-deb/*.deb
+
+  publish-apt-repo:
+    needs: build-debs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download this release's .deb files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist-deb
+          gh release download "$GITHUB_REF_NAME" --repo "${{ github.repository }}" \
+            --pattern '*.deb' --dir dist-deb
+
+      - name: Import the apt repo signing key
+        env:
+          GNUPGHOME: ${{ runner.temp }}/gnupg
+        run: |
+          mkdir -m 700 -p "$GNUPGHOME"
+          echo "${{ secrets.APT_SIGNING_KEY }}" | gpg --batch --import
+
+      - name: Build the signed repo tree
+        env:
+          GNUPGHOME: ${{ runner.temp }}/gnupg
+          GPG_SIGNING_FINGERPRINT: ${{ secrets.APT_SIGNING_KEY_FINGERPRINT }}
+        run: packaging/apt/build-repo.sh dist-deb "${{ runner.temp }}/apt-build"
+
+      - name: Publish to GitHub Pages (gh-pages branch)
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ${{ runner.temp }}/apt-build/repo
+          publish_branch: gh-pages
+          # A fresh orphan commit per release instead of accumulating
+          # history -- GitHub Releases is already the permanent archive
+          # for every past .deb; this branch only needs to serve the
+          # current one.
+          force_orphan: true

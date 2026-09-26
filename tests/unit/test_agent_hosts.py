@@ -35,6 +35,18 @@ def test_write_ssh_config_overwrites_on_regeneration(tmp_path) -> None:
     assert "wb02-ssh" in text
 
 
+def test_write_ssh_config_skips_the_write_when_content_is_unchanged(tmp_path) -> None:
+    """Regression test: this runs every poll cycle (as often as every
+    couple of seconds) -- rewriting identical bytes burns an embedded
+    device's finite flash write budget for nothing."""
+    path = write_ssh_config(tmp_path, [("wb01-ssh", 5000)])
+    mtime_before = path.stat().st_mtime_ns
+
+    write_ssh_config(tmp_path, [("wb01-ssh", 5000)])
+
+    assert path.stat().st_mtime_ns == mtime_before
+
+
 def test_ensure_include_adds_line_to_empty_file(tmp_path) -> None:
     ssh_config = tmp_path / "config"
     managed = tmp_path / "frp-jump" / "ssh_config"

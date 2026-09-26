@@ -1,369 +1,197 @@
-# Architecture
+# Internals
 
-See the module layout in the README first if you haven't already.
+For people changing the code. If you want to understand what frp-jump does
+rather than how it is built, read [How it works](how-it-works.md) first.
 
-## Data flow
+## Module map
 
 ```
-server/                     control-plane: source of truth
-  mini-CA (common/pki.py)   issues device certs on enroll
-  SQLite (common/models.py) users (identified by an SSH public key),
-                             devices, services, grants, enroll tokens,
-                             enroll challenges
-  server/api.py              agent-facing: enroll (token or key-based
-                             challenge/response), heartbeat, desired-state
-                             pull, every self-service device/connection
-                             endpoint (bearer-token auth throughout)
-  frps managed through the same driver abstraction as frpc
-
-driver/                     abstract TunnelDriver / RelayDriver
-  frp/                      concrete implementation: renders frps.toml /
-                             frpc.toml, supervises the subprocess,
-                             downloads+checksums the pinned frp release,
-                             reads relayed-traffic counters off frps's
-                             own admin API
-
-agent/                      runs on every device
-  enroll.py: one-time token, or a signed challenge over an already-
-             registered SSH key -> cert + api_token, persisted to state.json
-  poller.py: heartbeat -> pull desired-state -> driver.apply() -> refresh
-             ~/.ssh/config, on a timer, with exponential backoff on failure
-  hosts.py: the ssh_config management, isolated so it's testable without
-            a real filesystem-wide ~/.ssh/config
-  service_install.py: writes + enables the systemd unit for `client run`
+src/frp_jump/
+  common/     settings, DB models, private CA, opaque tokens, SSH signing
+  driver/     TunnelDriver / RelayDriver protocols
+    frp/      the only code that knows it's frp underneath
+  server/     registry (CRUD), agent-facing API, bootstrap, systemd install
+  agent/      enroll, sync loop, local state, ssh_config, systemd install
+  cli/        frp-jump-server / frp-jump-client entry points
 ```
 
-There is no WebUI or web-facing admin surface of any kind. Administration
-is entirely `frp-jump-server` CLI commands, run over SSH to the box —
-SSH access to that box *is* the admin authorization boundary, the same
-way it always was for anything else you'd manage there.
+`tests/unit/` mirrors this roughly one to one. `tests/integration/` holds the
+tests that download real frp binaries, behind the `integration` marker.
 
-## Grant wiring (the part that does the actual p2p-with-fallback)
+## The four rules this codebase follows
 
-Per `Grant`, the exposing device's frpc gets **two** proxies sharing one
-secret:
+**No hardcoded configuration.** Ports, TTLs, version pins, and paths live in
+`common/settings.py` and flow in as parameters. Nothing reads a module-level
+constant deep in the call stack.
 
-```toml
-[[proxies]]
-name = "<grant-id>-xtcp"
-type = "xtcp"
-secretKey = "<grant.secret>"
-localIP = "127.0.0.1"
-localPort = <service.target_port>
-allowUsers = ["*"]                     # frp's own ACL; the real gate is the
-                                        # per-grant secretKey, not this
-transport.useEncryption = true         # the tunneled payload itself, not
-                                        # just the frpc<->frps control channel
+**The tunneling engine stays behind the abstraction.** `driver/base.py` defines
+`TunnelDriver` and `RelayDriver` as Protocols. Only `driver/frp/` knows what frp
+is. If you are reaching for an frp concept outside that package, something is in
+the wrong place.
 
-[[proxies]]
-name = "<grant-id>-stcp"
-type = "stcp"
-secretKey = "<grant.secret>"
-localIP = "127.0.0.1"
-localPort = <service.target_port>
-allowUsers = ["*"]
-transport.useEncryption = true
-```
+**`registry.py` is framework-agnostic.** It takes a plain SQLModel `Session`,
+never a FastAPI `Request`. That is what lets it be unit-tested without starting
+the app.
 
-and the consuming device's frpc gets **two** visitors, wired together:
+**Data crossing a boundary is a dataclass, not an ORM row.** See
+`registry.ExposedGrantView` and friends. The database schema stays free to
+change without rippling into JSON shapes.
 
-```toml
-[[visitors]]
-name = "<grant-id>-stcp-visitor"
-type = "stcp"
-serverName = "<grant-id>-stcp"
-secretKey = "<grant.secret>"
-bindPort = -1                          # accepts fallback traffic only
-transport.useEncryption = true
+## Decisions worth knowing
 
-[[visitors]]
-name = "<grant-id>-xtcp-visitor"
-type = "xtcp"
-serverName = "<grant-id>-xtcp"
-secretKey = "<grant.secret>"
-bindAddr = "127.0.0.1"
-bindPort = <consumer's persisted local port>
-fallbackTo = "<grant-id>-stcp-visitor"
-fallbackTimeoutMs = <settings.xtcp_fallback_timeout_ms>
-transport.useEncryption = true
-```
+### The agent allocates local ports, not the server
 
-This is entirely frp's own mechanism (`client/visitor/xtcp.go`'s
-`fallbackTo`): xtcp hole-punching is attempted first, and on timeout frp
-falls back to the stcp visitor while hole-punching keeps retrying in the
-background. See `tests/integration/test_frp_e2e.py` for this exercised
-end to end.
+The server has no idea what is free on a given device. `agent/poller.py` picks a
+port the first time it sees a new grant id and persists it in `state.json`, so
+it survives restarts and ssh aliases stay stable. `Grant` has no `local_port`
+column for exactly this reason.
 
-`frp-jump-client set-p2p disabled` skips all of this on the consuming
-side: `build_frpc_config`'s `disable_p2p` collapses the pair above into a
-single stcp visitor bound directly to the consumer's local port (no
-xtcp visitor, no `fallbackTo`) -- for a device whose network can't
-punch through at all (e.g. everything routed through a VPN), so every
-new connection stops paying `fallbackTimeoutMs` to fail at something
-that was never going to work. It's a per-device choice, persisted in
-that device's own `state.json` (`disable_p2p`) -- it only changes what
-*this* device's own visitors do; other devices can still reach it
-peer-to-peer, since its exposing-side xtcp proxy above is unaffected.
+Ports come from a dedicated range (default 40000-40999), not the kernel's
+ephemeral range — the kernel could otherwise hand the same port to an unrelated
+outbound connection later.
 
-**The consumer picks its own local port**, not the server — the server
-doesn't know what's free on a given device, so `agent/poller.py` allocates
-one the first time it sees a new `grant_id` and persists it in
-`state.json` (`local_ports`), so it stays stable across restarts and
-`~/.ssh/config` aliases don't shift under you. `common/models.Grant` has
-no `local_port` column for this reason — it lives entirely in agent state.
-Ports come from a dedicated range (`settings.agent_local_port_range_*`,
-default 40000-40999), not the kernel's ephemeral range, and are
-re-validated as still bindable only on the first sync cycle after a
-(re)start — not every cycle, since once frpc holds the port it is
-correctly "not bindable" by us and re-checking every cycle would misread
-that as a collision and restart the tunnel every poll. See
-`build_desired_state`'s docstring in `agent/poller.py`.
+They are re-validated as bindable only on the first sync cycle after a restart.
+Not every cycle: once frpc holds the port, it is correctly "not bindable" by us,
+and re-checking would read that as a collision and restart the tunnel on every
+poll. See `build_desired_state`'s docstring.
 
-**Disabling is enforced at the control-plane only, not at the relay.**
-`Device.enabled = False` does *not* stop the device authenticating to the
-control-plane API (`registry.get_device_by_api_token` doesn't check it)
--- it still heartbeats and pulls desired-state, which is deliberate: a
-disabled device needs to keep polling so it notices being re-enabled
-later. What it *does* do: its desired-state (both what it exposes and
-what it consumes) goes empty on its next poll, so its agent tears down
-every proxy/visitor in its frpc config; and every *mutating* self-service
-route (`server/api.py`'s `get_enabled_device` dependency) starts
-rejecting its bearer token with 403 -- so a disabled device's still-valid
-token cannot be used to re-enable itself, rotate the owner's key, delete
-another of the owner's devices, or open a new connection. Only another
-still-enabled device of the same owner, or the admin CLI, can flip it
-back. None of this touches frps/mTLS directly: a device that's already
-connected keeps whatever it was last configured to relay until it
-reconnects or the relay restarts. `delete_device`/`delete_user` are the
-only irreversible operations; a compromised device that must be cut off
-*immediately*, not just on its next poll, still means rotating the CA.
-See the module docstring in `common/models.py`.
+### Disabling is a control-plane action, by design
 
-## Identity and enrollment (SSH-key based)
+`Device.enabled = False` does not stop the device authenticating.
+`registry.get_device_by_api_token` deliberately keeps accepting it, so a
+disabled device keeps polling and can notice being re-enabled.
 
-A `User` is identified by an SSH public key (`ssh_public_key`, a unique
-`ssh_key_fingerprint` computed by `common/ssh_signing.fingerprint`, and a
-friendly `label` for admin use) -- there is no email or password anywhere
-in this system. An admin registers someone once, over SSH to the box:
+What it does: desired state goes empty on the next poll, and every mutating
+route rejects the token via the `get_enabled_device` dependency. A disabled
+device's still-valid token cannot re-enable itself, rotate the owner's key,
+delete a sibling device, or open a connection.
 
-```sh
-frp-jump-server users add-key alice_key.pub --label alice
-```
+None of this reaches frps or mTLS. Hard, immediate revocation means rotating the
+CA. This is stated for users in [Security model](security.md#turning-a-device-off).
 
-From there, every device that person enrolls can either present a
-one-time `EnrollToken` (the classic flow, unchanged in shape --
-`enroll-tokens create`/self-service `devices add-token`), or prove
-possession of the already-registered private key directly, with no token
-at all:
+### Device names are unique per owner
 
-1. `POST /api/agent/enroll/challenge {public_key}` -- always returns a random nonce
-   (`EnrollChallenge`, a short-lived DB row --
-   `settings.enroll_challenge_ttl_seconds`, default 120s), whether or not
-   that key's fingerprint is actually registered
-   (`registry.create_enroll_challenge`). Whether it is only becomes
-   visible at the next step, where an unknown fingerprint fails exactly
-   like a bad signature -- a 200-vs-404 split here, however worded, would
-   itself be an oracle for which keys the server knows about. Outstanding
-   challenges per fingerprint are capped and expired ones opportunistically
-   purged on each call, since this route is unauthenticated by design.
-2. The client signs the nonce locally: `ssh-keygen -Y sign -f
-   <private-key> -n frp-jump-enroll <nonce-file>` (`common/ssh_signing
-   .sign`) -- the private key never leaves the device.
-3. `POST /api/agent/enroll/by-key {challenge_id, signature, requested_name}` --
-   server verifies with `ssh-keygen -Y verify` against the *stored*
-   public key (`registry.redeem_enroll_challenge`), and on success creates
-   the `Device` exactly like `redeem_enroll_token` does. Consumption is an
-   atomic conditional `UPDATE ... WHERE used_at IS NULL` (same for
-   `EnrollToken`), not a read-then-write -- two concurrent redemptions of
-   the same token/challenge could otherwise both pass validation and each
-   create a device before either committed.
+`UniqueConstraint(owner_user_id, name)`. Two people can each have a `laptop`.
+Every lookup that resolves a device by name takes the owner id explicitly, and
+the admin CLI's mutating `devices` subcommands require `--user` — an unqualified
+name would be ambiguous.
 
-Both `ssh-keygen -Y sign`/`-Y verify` calls shell out to the real OpenSSH
-client (the same mechanism git uses for SSH-signed commits) -- no
-crypto library reimplements this. `-n frp-jump-enroll` namespaces the
-signature so it can never be replayed as, say, a git-commit signature or
-vice versa.
+### Services are synthetic and private
 
-A user can rotate their key at any time -- `frp-jump-server users
-set-key <label> <new-key.pub>` (admin recovery, trusted by construction:
-an operator with shell access on the box) or self-service
-`frp-jump-client set-key <new-private-key-path> <current-private-key-path>`
-(bearer-authed via any of their own enrolled devices). The self-service
-path is a signed challenge/response round trip: `POST
-/api/agent/users/set-key/challenge {public_key}` returns a nonce, then
-`POST /api/agent/users/set-key {challenge_id, signature, current_signature}`
-must carry that same nonce signed by *both* the new key and the account's
-currently-registered key before `registry.redeem_key_rotation_challenge`
-rotates anything. Requiring the current key too (not just the new one)
-means a bearer token from a single compromised device is never enough on
-its own to hijack the whole account -- losing the current key outright
-falls back to the admin recovery path above.
+`svc-<device_id>-<port>`, created on demand by `connect` from just (device,
+port). Never human-authored, never displayed. There is no admin path that
+creates one directly; `registry.create_service` exists for unit tests of the
+lower-level function.
 
-## Device/grant lifecycle
+`services.name` is still one global unique index, so a concurrent
+`connect`/re-enroll race can hit it. That surfaces as a clean `ConflictError`,
+not a raw `IntegrityError`.
 
-- **`enable`/`disable`** (`Device.enabled`) is the *reversible* state --
-  see "Disabling is enforced..." above. `delete` is the only irreversible
-  one (cascades to the device's own services/grants, frees its name).
-  There is no separate "revoke" concept for either a device or a grant
-  any more -- a grant that should go away is just deleted
-  (`registry.delete_grant`), full stop.
-- **Device names are unique per-owner, not globally**
-  (`UniqueConstraint(owner_user_id, name)` on `devices`) -- two different
-  people can each enroll a device called "laptop". Every lookup that
-  resolves a device by name (`registry.get_device_by_name`,
-  `_check_name_free`) takes the owner id explicitly; the admin CLI's
-  mutating `devices` subcommands (`delete`/`disable`/`enable`) require
-  `--user` for exactly this reason -- an unqualified name would otherwise
-  be ambiguous across owners.
-- **Self-service disconnect can target any of the caller's own devices**,
-  not just the calling one -- `DisconnectRequest.consumer_device_name`
-  (`client disconnect --from OTHER-DEVICE`) resolves that other device
-  the same ownership-scoped way as everything else, then deletes the
-  grant on its behalf. Useful for tearing down a connection you notice
-  was left up on a different device of yours.
-- **`Service` names are private and synthetic**
-  (`svc-<device_id>-<port>`, `registry.find_or_create_service`), created
-  on demand by `client connect` from just (device, port) -- never
-  human-authored or shown to anyone. There is no admin path that creates
-  a `Service` directly any more (`registry.create_service` exists purely
-  for direct unit-testing of the lower-level registry function). The
-  `services.name` column is still one global unique index, so a
-  concurrent `connect`/re-enroll race can in principle still hit it --
-  handled as a clean `ConflictError`, not a raw `IntegrityError`.
-- **Local "profiles" replace service names as the human-facing label.**
-  A profile (`agent/state.py`'s `Profile`, keyed by a name in
-  `AgentState.profiles`) is pure client-side state -- `{device_name,
-  target_port}` -- created by `client connect --as <name>` (default: the
-  target device's own name) and never sent to or known by the server. Two
-  different devices can use different profile names for the exact same
-  server-side grant; the server doesn't care. `agent/poller.py`'s
-  `sync_ssh_config` resolves the `ssh <alias>` Host block from a matching
-  profile when one exists, falling back to the exposing device's name
-  otherwise (e.g. a grant that was set up directly via the admin CLI).
-- **Self-service device/connection endpoints** (`server/api.py`,
-  `/api/agent/devices*`, `/api/agent/connect`, `/api/agent/disconnect`)
-  are all scoped to the calling device's `owner_user_id` --
-  `api._get_owned_device_by_name` returns 404 for a device you don't own,
-  so as not to leak whether a name belongs to someone else (per-owner
-  name scoping means it can no longer even leak *that* the name is taken
-  by a stranger -- your own devices are the only namespace you can
-  observe at all). Every *mutating* self-service route additionally
-  depends on `get_enabled_device`, not just `get_current_device` -- see
-  "Disabling is enforced..." above.
-- **Accepted, not enforced**: nothing rate-limits how many `EnrollToken`s
-  a device can mint via `devices add-token`, or how many `Service`/`Grant`
-  rows it can create via `connect` (up to 65535 ports x however many
-  devices you own). Given the threat model (an already-authenticated
-  device spending only its own owner's rows in your own SQLite database,
-  not a stranger's), this is accepted as-is rather than adding a limit
-  that would only matter to an already-trusted party being unusually
-  hostile.
+### Profiles are client-side only
 
-## Relayed-traffic visibility (deliberately relay-only)
+`agent/state.Profile` is `{device_name, target_port}` under a local name. The
+server never sees it. Two devices can call the same grant different things.
+`sync_ssh_config` resolves the ssh alias from a matching profile, falling back
+to the exposing device's name for a grant created some other way.
 
-`frp-jump-server users show`/`devices list` show a compact "relayed
-today: X in / Y out" figure per connection, sourced from frps's own local
-admin API (`driver.frp.driver.fetch_all_proxy_traffic`, one `GET
-/api/proxy/stcp` call fetching every grant's counters at once, on
-`127.0.0.1:{frps_admin_port}`). This is deliberately scoped to
-*relayed* traffic only, not total traffic, for a reason grounded in
-frp's own source (`fatedier/frp`): every grant's `stcp`
-proxy always has its data flow through frps by construction, and frps
-does track bytes for it (`server/proxy/proxy.go`'s
-`handleUserTCPConnection`, shared by `tcp`/`http`/`stcp`, calls
-`metrics.Server.AddTrafficIn/Out`). A grant's `xtcp` proxy, when hole-
-punching succeeds, carries its data directly between the two frpc
-processes -- entirely bypassing frps -- and `server/proxy/xtcp.go` never
-calls that same accounting code at all. Neither frps nor frpc tracks
-xtcp/p2p traffic anywhere. So a genuinely peer-to-peer connection reports
-zero here even while carrying real traffic; this is a limitation of what
-frp itself exposes, not a bug in this project, and the CLI's own docstring
-(`cli/server_cmds._relayed_today`) says so. Building true total-traffic
-accounting would mean OS-level byte counting on the local bound ports
-instead -- a materially bigger feature, not implemented.
+### Challenge redemption is an atomic conditional update
 
-## Packaging split
+Both `EnrollToken` and `EnrollChallenge` are consumed with
+`UPDATE ... WHERE used_at IS NULL`, not read-then-write. Two concurrent
+redemptions could otherwise both pass validation and each create a device before
+either committed.
 
-`frp-jump-client` and `frp-jump-server` are separate `[project.scripts]`
-entry points in one package (`pyproject.toml`), with fastapi/uvicorn/
-sqlmodel moved to an optional `[server]` extra -- a device-only `pip
-install frp-jump` never imports them.
+### The enroll challenge endpoint is deliberately uninformative
 
-## Known limitations / follow-ups
+`POST /api/agent/enroll/challenge` returns a nonce whether or not the fingerprint is
+registered. An unknown key fails at the redeem step, exactly like a bad
+signature. A 200-vs-404 split would be an oracle for which keys the server
+knows. Outstanding challenges per fingerprint are capped, and expired ones are
+purged opportunistically, since the route is unauthenticated by design.
 
-- **`ensure_installed`'s checksum file is fetched from the same
-  host/connection as the binary it verifies** -- it guards against
-  corruption/truncation, not a compromised connection or release.
-  `driver/frp/binaries.py`'s module docstring says so explicitly.
-- **frpc's admin API can't tell you p2p-vs-relay for a *visitor*.**
-  Checked against `fatedier/frp`'s `client/api_router.go` (dev branch):
-  `/api/status` reports proxy status on the *exposing* side, there's no
-  `/api/visitor-status` route. `driver.frp.FrpDriver.status()` therefore
-  reports `ProxyState.UNKNOWN` for now rather than guessing. A real fix
-  would tail frpc's log for the hole-punch/fallback lines (see the
-  integration test's captured log for what those look like) or watch for
-  an upstream API addition. Related but distinct from the "Relayed-traffic
-  visibility" section above: that one at least gives an authoritative
-  *relayed-bytes* signal from frps directly, it just can't distinguish
-  "genuinely p2p" from "no traffic yet".
-- **Real NAT hole-punching is not verified by the test suite** — the
-  integration test runs over loopback, so it proves the config shape and
-  the fallback mechanism, not that xtcp actually punches through two
-  independent real NATs. Check that manually on real devices.
-- **`server run`'s relay shutdown isn't signal-safe in all launch
-  contexts** — observed during manual testing that killing the wrapping
-  process (e.g. through `uv run`) doesn't always reach the `finally:
-  relay.stop()` in `cli/server_cmds.py`. Under systemd (the real
-  deployment path, not `uv run`) this hasn't been an issue, but it's
-  worth hardening with explicit `signal.signal(SIGTERM, ...)` handling if
-  it recurs.
+### Client account selection is continuity-first
 
-## Implementation notes
+`agent/service_install.resolve_default_target` prefers an auto-created
+`frp-jump-client` system account — but only when nothing is enrolled yet at the
+traditional location. Reusing existing state always beats picking a "better"
+account, so a later `sudo install-service` can never orphan an earlier
+unprivileged `enroll`.
 
-- **x509 serial numbers overflow SQLite's `INTEGER`.**
-  `cryptography`'s `random_serial_number()` can return up to a 160-bit
-  value; SQLite's `INTEGER` is 64-bit. `Device.cert_serial` is `str`, not
-  `int`.
-- **`sqlite:///:memory:` needs `poolclass=StaticPool`** the moment more
-  than one thread might open a connection (e.g. FastAPI's `TestClient`,
-  which runs handlers in a threadpool) — otherwise each new connection
-  gets its own empty in-memory database and every query 500s with "no
-  such table". See `server/db.py`.
-- **A server cert needs an `iPAddress` SAN, not a `dNSName` one, when
-  `serverAddr` is a bare IP.** Go's TLS client won't match a `dNSName`
-  entry against an IP host at all. `common/pki._san_entries` picks the
-  right SAN type per entry automatically.
-- **Only `FrpsRelayDriver` (the server side) has an admin API port.**
-  `FrpDriver` (the client side) deliberately never enables frpc's own
-  `webServer` -- see its module docstring in `driver/frp/driver.py`.
-  Multiple `FrpsRelayDriver` instances on one host still need distinct
-  `admin_port` values, which is why it has no default and must be passed
-  explicitly (from `Settings`, ultimately).
-- **A freshly-minted `EnrollToken` for a name doesn't block a second one
-  for the same name** unless you check pending (unused, unexpired) tokens
-  too, not just already-enrolled `Device` rows — otherwise two unredeemed
-  tokens for `wb01` can exist, and whichever redeems second dies with a
-  raw DB integrity error instead of a clean conflict message. Covered by
-  `tests/unit/test_registry.py::test_create_enroll_token_rejects_duplicate_name_while_unredeemed_token_exists`.
-- **Device certs get `CLIENT_AUTH` only, never `SERVER_AUTH`.**
-  `common/pki.CertificateAuthority.issue(..., server_auth=...)` defaults
-  to `False`; only `bootstrap.load_or_create_relay_cert`'s single call
-  passes `server_auth=True`. A device cert that could also present as a
-  valid relay TLS identity would have no purpose other than letting an
-  on-path device impersonate the relay to others.
-- **The control-plane API hides what it is from anyone just poking at
-  it.** `server/app.py` serves a generic placeholder at `/` and disables
-  FastAPI's auto `/docs`/`/redoc`/`/openapi.json` — a relay box is
-  reachable from the whole internet by construction, no reason to hand
-  an opportunistic scanner a readable schema of what's running there.
-- **The client's default `install-service`/`enroll` account-selection is
-  continuity-first, not "always most isolated."**
-  `agent/service_install.resolve_default_target` prefers an auto-created
-  `frp-jump-client` system account, but only when nothing is enrolled yet
-  at the traditional location (a real person via `sudo`, or root on a
-  no-other-account device) — reusing existing state always wins over
-  picking a "better" account, so a later `sudo install-service` can never
-  orphan an earlier unprivileged `enroll`. It also falls back rather than
-  failing when the dedicated account can't execute the binary at all
-  (`_world_traversable` — e.g. a personal venv under a `750` home
-  directory, increasingly common on newer distros' default).
+It also falls back rather than failing when the dedicated account cannot execute
+the binary at all (`_world_traversable` — a venv under a `0750` home directory,
+increasingly common on newer distros). An explicit `--system-user` fails loudly
+instead, because that one is a deliberate request.
+
+### Accepted, not enforced
+
+Nothing rate-limits how many enroll tokens a device mints, or how many services
+and grants it creates. The threat model is an already-authenticated device
+spending rows in its own owner's database on your own server. A limit here would
+only inconvenience an already-trusted party being unusually hostile.
+
+## Gotchas
+
+Each of these cost someone an afternoon once.
+
+| Thing | Why it bites |
+| --- | --- |
+| `Device.cert_serial` is `str`, not `int` | `cryptography`'s `random_serial_number()` returns up to 160 bits. SQLite's `INTEGER` is 64 |
+| `sqlite:///:memory:` needs `poolclass=StaticPool` | FastAPI's `TestClient` runs handlers in a threadpool. Without it, each connection gets its own empty database and every query 500s with "no such table". See `server/db.py` |
+| A bare-IP `serverAddr` needs an `iPAddress` SAN | Go's TLS client will not match a `dNSName` entry against an IP host. `common/pki._san_entries` picks the right type per entry |
+| Device certs get `CLIENT_AUTH` only | Only `bootstrap.load_or_create_relay_cert` passes `server_auth=True`. A device cert that could also present as the relay would let an on-path device impersonate it |
+| Only the server-side driver enables an admin API | `FrpDriver` never turns on frpc's `webServer`. `FrpsRelayDriver` needs a distinct `admin_port` per instance, which is why it has no default |
+| A pending enroll token blocks a second one for the same name | Check unused, unexpired tokens as well as existing `Device` rows, or the second redemption dies with a raw integrity error. Covered by `test_create_enroll_token_rejects_duplicate_name_while_unredeemed_token_exists` |
+| The API hides what it is | `server/app.py` serves a placeholder at `/` and disables `/docs`, `/redoc`, `/openapi.json`. A relay box is internet-reachable by construction |
+
+## Known limitations
+
+**The frp checksum comes from the same host as the binary.**
+`driver/frp/binaries.py` fetches both from the same GitHub release over the same
+connection. It guards against corruption, not against a compromised connection
+or release. Fixing it properly means pinning per-architecture digests next to
+`frp_version` in settings.
+
+**frpc cannot tell us whether a visitor went peer-to-peer.** Checked against
+`fatedier/frp`'s `client/api_router.go`: `/api/status` covers proxies on the
+exposing side, and there is no visitor equivalent. `FrpDriver.status()` reports
+`ProxyState.UNKNOWN` rather than guessing. A real fix means tailing frpc's log
+for the hole-punch and fallback lines, or waiting for an upstream API.
+
+**Relayed-traffic figures are relay-only, and that is structural.** Every
+grant's `stcp` proxy flows through frps, which does account for it
+(`server/proxy/proxy.go`'s `handleUserTCPConnection`). The `xtcp` proxy, when
+hole-punching succeeds, carries data directly between two frpc processes, and
+`server/proxy/xtcp.go` never calls that accounting code. Neither side tracks it
+anywhere. True total-traffic accounting would mean OS-level byte counting on the
+local bound ports — a materially bigger feature.
+
+**Real NAT hole-punching is not covered by tests.** The integration test runs
+over loopback. It proves the config shape and the fallback mechanism, not
+traversal across two independent NATs. Verify that by hand on real devices.
+
+**`server run`'s relay shutdown is not signal-safe everywhere.** Killing a
+wrapping process (`uv run`, for instance) does not always reach the
+`finally: relay.stop()` in `cli/server_cmds.py`. Under systemd, the real
+deployment path, this has not come up. Worth hardening with an explicit
+`signal.signal(SIGTERM, ...)` if it recurs.
+
+## Packaging
+
+`frp-jump-client` and `frp-jump-server` are two `[project.scripts]` entry points
+in one package. FastAPI, uvicorn, SQLModel, and `cryptography` live in an
+optional `[server]` extra, so a device install never imports them.
+
+`cryptography` in particular has no prebuilt wheel on some platforms and needs a
+Rust toolchain to build from source. Keeping it off the client's dependency
+chain is worth it for that alone. `common/crypto.py`'s `write_private_key` —
+which the client does use — is deliberately dependency-free for the same reason,
+rather than living next to `common/pki.py`.
+
+The `.deb` bundles its own Python 3.12 under `/opt/frp-jump-client`, built per
+architecture through `docker buildx` with QEMU. See
+[`packaging/deb/build.sh`](../packaging/deb/build.sh).
+
+## See also
+
+- [CONTRIBUTING.md](../CONTRIBUTING.md) — setup, tests, conventions.
+- [How it works](how-it-works.md) — the user-facing explanation.

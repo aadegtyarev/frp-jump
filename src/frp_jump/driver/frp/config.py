@@ -134,6 +134,14 @@ def build_frpc_config(
         "serverPort": desired.server_port,
         "loginFailExit": False,
         "transport": {"tls": _tls_block(cert_file=cert_file, key_file=key_file, ca_file=ca_file)},
+        # frpc's own "info" level logs its full connection/heartbeat/proxy
+        # chatter to stdout every cycle -- under systemd that's every line
+        # in `journalctl`, forever. "warn" keeps genuine problems (auth
+        # failures, connection errors) visible while dropping the routine
+        # noise; the agent's own poller.py logs the meaningful lifecycle
+        # events (what's exposed/consumed) at its own INFO level instead,
+        # and `status` shows the current state on demand.
+        "log": {"level": "warn"},
     }
     if proxies:
         config["proxies"] = proxies
@@ -155,6 +163,7 @@ def build_frps_config(
     return {
         "bindPort": desired.bind_port,
         "transport": {"tls": tls},
+        "log": {"level": "warn"},
     }
 
 

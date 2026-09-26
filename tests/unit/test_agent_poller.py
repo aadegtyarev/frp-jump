@@ -1,4 +1,5 @@
 import base64
+import logging
 import socket
 import subprocess
 
@@ -379,6 +380,37 @@ def test_sync_ssh_config_uses_the_local_profile_name_when_one_exists(tmp_path) -
 
     managed_text = (tmp_path / "ssh_config").read_text()
     assert "Host my-wb01" in managed_text
+
+
+def test_log_grant_changes_logs_once_then_stays_quiet_on_repeat(monkeypatch, caplog) -> None:
+    """frpc's own log level is turned down to "warn" specifically so this
+    is what shows up in the journal instead -- but only when something
+    actually changed, not every poll cycle (default every 2s)."""
+    monkeypatch.setattr(poller, "_last_logged_grants", {})
+    remote = {
+        "exposed": [{"target_port": 22}],
+        "consumed": [{"exposer_device_name": "wb02", "target_port": 8080}],
+    }
+    caplog.set_level(logging.INFO, logger="frp_jump.agent.poller")
+
+    poller._log_grant_changes("dev-log-test-1", remote)
+    poller._log_grant_changes("dev-log-test-1", remote)
+
+    assert len(caplog.records) == 1
+    assert "22" in caplog.text
+    assert "wb02:8080" in caplog.text
+
+
+def test_log_grant_changes_logs_again_when_the_set_changes(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(poller, "_last_logged_grants", {})
+    caplog.set_level(logging.INFO, logger="frp_jump.agent.poller")
+
+    poller._log_grant_changes("dev-log-test-2", {"exposed": [{"target_port": 22}], "consumed": []})
+    poller._log_grant_changes(
+        "dev-log-test-2", {"exposed": [{"target_port": 22}, {"target_port": 80}], "consumed": []}
+    )
+
+    assert len(caplog.records) == 2
 
 
 def test_sync_once_runs_the_full_cycle(tmp_path, monkeypatch) -> None:

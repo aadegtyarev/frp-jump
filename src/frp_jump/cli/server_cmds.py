@@ -250,7 +250,15 @@ def run() -> None:
         raise typer.Exit(1)
 
     try:
-        uvicorn.run(web_app, host=settings.api_host, port=settings.api_port, **ssl_kwargs)
+        # Every enrolled device polls every agent_poll_interval_seconds
+        # (default 2s) -- uvicorn's default per-request access log would
+        # log a heartbeat and a desired-state fetch that often, for every
+        # device, forever. Genuine errors (5xx, connection issues) still
+        # surface through uvicorn's own error logger, which this doesn't
+        # touch.
+        uvicorn.run(
+            web_app, host=settings.api_host, port=settings.api_port, access_log=False, **ssl_kwargs
+        )
     finally:
         relay.stop()
 

@@ -6,6 +6,22 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-09-26
+
+### Changed
+
+- **Much quieter logging by default.** frpc/frps's own internal log
+  level is turned down to `warn` -- previously unset (frp's own
+  "info" default), which spammed every routine connection/heartbeat
+  line straight into `journalctl` forever. The agent now logs its own
+  meaningful lifecycle events (what's currently exposed/consumed) at
+  `INFO`, once per change rather than every poll cycle, so a healthy
+  agent is quiet and a real problem still shows up as a warning/error.
+  The server's uvicorn access log is off too, for the same reason --
+  every enrolled device's heartbeat/desired-state poll would otherwise
+  log a line every `agent_poll_interval_seconds` (default 2s), for
+  every device, forever.
+
 ## [0.3.8] - 2026-09-26
 
 ### Changed

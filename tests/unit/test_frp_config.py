@@ -82,6 +82,14 @@ def test_frps_config_forces_tls_and_sets_bind_port() -> None:
     assert config["bindPort"] == 7000
     assert config["transport"]["tls"]["force"] is True
     assert config["transport"]["tls"]["trustedCaFile"] == "ca.crt"
+    assert config["log"]["level"] == "warn"
+
+
+def test_frpc_config_quiets_frpc_own_log_level() -> None:
+    config = build_frpc_config(
+        _desired(), cert_file="c.crt", key_file="c.key", ca_file="ca.crt", fallback_timeout_ms=1500
+    )
+    assert config["log"]["level"] == "warn"
 
 
 def test_write_toml_round_trips_through_tomllib(tmp_path) -> None:

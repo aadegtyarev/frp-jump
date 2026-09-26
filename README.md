@@ -255,6 +255,15 @@ default.
 Reach for [`packaging/systemd/`](packaging/systemd/) directly only for a
 manual or packaged (`.deb`) install.
 
+**Logging**: a healthy agent is quiet in `journalctl`. frpc's own
+internal log level is turned down to `warn` (genuine problems still show
+up); the agent logs its own meaningful lifecycle events -- what's
+currently exposed/consumed -- at `INFO`, once per change, not every poll
+cycle. Nothing here is `DEBUG` by default. Same for the server: uvicorn's
+per-request access log is off (every enrolled device's heartbeat/
+desired-state poll would otherwise log a line every
+`agent_poll_interval_seconds`), errors still surface normally.
+
 **Server** — `frp-jump-server install-service [--system-user NAME]
 [--relay-public-addr ADDR]` is the equivalent one-shot setup: creates the
 system account, bootstraps the CA/database, writes

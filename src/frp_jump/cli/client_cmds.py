@@ -4,6 +4,7 @@ needed for any of it once you have one enrolled device)."""
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from importlib.metadata import PackageNotFoundError, version
@@ -454,6 +455,13 @@ def run_cmd(
 
         frp-jump-client run --poll-interval 10
     """
+    # INFO (not DEBUG) by default -- poller.py logs the meaningful lifecycle
+    # events (what's exposed/consumed, changes only) at this level; frpc's
+    # own noisy internal chatter is turned down to "warn" separately (see
+    # driver/frp/config.py), so this is what actually shows up in the
+    # journal for a healthy, quiet agent.
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
     settings = Settings()
     state = _require_state(settings)
     driver = _make_driver_with_retry(settings)

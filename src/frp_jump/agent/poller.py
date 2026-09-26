@@ -479,6 +479,33 @@ def sync_ssh_config(
     hosts.ensure_include(ssh_config_path, managed_path)
 
 
+# Keyed by device_id (a single long-running `run` process only ever has
+# one) -- lets `_log_grant_changes` log only when the exposed/consumed set
+# actually changes since the last cycle, not every poll (default every
+# 2s). Deliberately not part of `AgentState`/state.json: purely a log
+# de-duplication aid, never read back or relied on for correctness.
+_last_logged_grants: dict[str, tuple[frozenset, frozenset]] = {}
+
+
+def _log_grant_changes(device_id: str, remote: dict) -> None:
+    """The one place this agent logs at INFO by default -- frpc's own log
+    level is turned down to "warn" (see `driver/frp/config.py`) precisely
+    so this, not frp's routine internal chatter, is what actually shows up
+    in the journal for a healthy agent: what's currently exposed/consumed,
+    logged once when it changes, not every poll cycle."""
+    exposed_now = frozenset(g["target_port"] for g in remote["exposed"])
+    consumed_now = frozenset(
+        (g["exposer_device_name"], g["target_port"]) for g in remote["consumed"]
+    )
+    previous = _last_logged_grants.get(device_id)
+    if previous == (exposed_now, consumed_now):
+        return
+    _last_logged_grants[device_id] = (exposed_now, consumed_now)
+    exposed_desc = ", ".join(str(p) for p in sorted(exposed_now)) or "none"
+    consumed_desc = ", ".join(f"{name}:{port}" for name, port in sorted(consumed_now)) or "none"
+    logger.info("exposing ports [%s], consuming [%s]", exposed_desc, consumed_desc)
+
+
 def sync_once(
     state: AgentState,
     driver: TunnelDriver,
@@ -511,6 +538,7 @@ def sync_once(
 
     send_heartbeat(state, agent_version=agent_version)
     remote = fetch_desired_state(state)
+    _log_grant_changes(state.device_id, remote)
     desired = build_desired_state(
         state, remote, data_dir=data_dir, port_range=port_range, revalidate=revalidate_ports
     )

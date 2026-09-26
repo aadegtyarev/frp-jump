@@ -323,7 +323,7 @@ def desired_state(
 # other device of its own owner -- see DisconnectRequest.consumer_device_name).
 # There is no cross-user self-service -- only an admin (`frp-jump-server
 # users add-key` / `enroll-tokens create`) starts a *different* owner's
-# device tree. See docs/architecture.md.
+# device tree. See docs/security.md.
 
 
 class SetKeyChallengeRequest(BaseModel):

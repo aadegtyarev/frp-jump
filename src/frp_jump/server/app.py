@@ -1,7 +1,7 @@
 """FastAPI application factory: wires settings/db/CA into app.state.
 
 No WebUI is mounted here -- administration is entirely `frp-jump-server`
-CLI, run over SSH to the box (see docs/architecture.md). This app serves
+CLI, run over SSH to the box (see docs/security.md). This app serves
 only the agent-facing control-plane API.
 """
 
@@ -17,7 +17,7 @@ from frp_jump.common.settings import Settings
 from frp_jump.server import api as agent_api
 
 # A relay box is reachable from the whole internet by construction (see
-# README's "Ports and firewalls") -- anything that identifies what's
+# docs/configuration.md's "Ports and firewalls") -- anything that identifies what's
 # actually running there (FastAPI's auto-generated /docs, /redoc,
 # /openapi.json, or an informative 404 on "/") is free reconnaissance for
 # an opportunistic scanner. None of that is needed: the only real client

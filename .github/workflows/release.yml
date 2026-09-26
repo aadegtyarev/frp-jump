@@ -69,11 +69,19 @@ jobs:
         # PyPI's index can take a few seconds to reflect a just-completed
         # upload; packaging/deb/build.sh installs this exact version from
         # PyPI (see its Dockerfile), so it must actually be there first.
+        #
+        # Checks the *simple* index specifically (what pip/uv actually
+        # resolve against), not the /pypi/<name>/<version>/json API --
+        # the two are backed by different caches and the JSON one has
+        # gone green several seconds before the simple index (behind a
+        # CDN) actually lists the file, which failed this exact job on
+        # the 0.3.0 and 0.3.1 releases with "no version of frp-jump==...
+        # found" a few seconds after this step reported success.
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           for _ in $(seq 1 20); do
-            if curl -fsS "https://pypi.org/pypi/frp-jump/${VERSION}/json" >/dev/null 2>&1; then
-              echo "OK: frp-jump==${VERSION} is live on PyPI"
+            if curl -fsS "https://pypi.org/simple/frp-jump/" 2>/dev/null | grep -q "${VERSION}"; then
+              echo "OK: frp-jump==${VERSION} is live on PyPI's simple index"
               exit 0
             fi
             sleep 10

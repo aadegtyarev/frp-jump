@@ -69,9 +69,22 @@ ARG FRP_JUMP_VERSION
 RUN uv python install --install-dir "${PREFIX}/python" "${PY_VERSION}"
 RUN rm -rf "${PREFIX}/python/.temp" "${PREFIX}/python/.lock" "${PREFIX}/python/.gitignore"
 
+# PyPI's simple index (what this resolves against) can lag a just-completed
+# upload by longer than the workflow's own pre-check accounts for -- that
+# check hit a different CDN edge than this container's own request does,
+# so it is not a guarantee this exact request sees the same state. Retry
+# a few times with a delay rather than trust a single upstream check.
 RUN PYBIN=$(echo "${PREFIX}"/python/cpython-"${PY_VERSION}".*/bin/python3) \
     && test -x "$PYBIN" \
-    && uv pip install --python "$PYBIN" --target "${PREFIX}/site-packages" "frp-jump==${FRP_JUMP_VERSION}"
+    && ok=false \
+    && for attempt in 1 2 3 4 5 6; do \
+        if uv pip install --python "$PYBIN" --target "${PREFIX}/site-packages" "frp-jump==${FRP_JUMP_VERSION}"; then \
+            ok=true; break; \
+        fi; \
+        echo "frp-jump==${FRP_JUMP_VERSION} not resolvable yet (attempt ${attempt}/6), retrying in 15s..."; \
+        sleep 15; \
+    done \
+    && [ "$ok" = true ]
 
 # Point the bundled interpreter at our site-packages by default, so the
 # pip-generated console-script wrappers (whose shebang is already this

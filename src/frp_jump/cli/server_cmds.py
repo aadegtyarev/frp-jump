@@ -298,6 +298,16 @@ def install_service(
     rerun any time -- it refreshes the unit to point at wherever
     `frp-jump-server` currently is, without touching your existing config.
 
+    Also installs a thin wrapper at /usr/local/bin/frp-jump-server: the
+    dedicated system account's data directory is 0700 (only it, or root,
+    can read the database), so this transparently re-runs every admin
+    command (`users`/`devices`/`enroll-tokens`/...) as that account via
+    `sudo -u` -- anyone who can `sudo` on this box can just run
+    `frp-jump-server users list` and have it work, no need to know the
+    account name or data directory. `install-service`/`init`/`run`
+    themselves pass straight through unwrapped (those need to actually
+    run as root or under systemd).
+
     This replaces doing all of that by hand -- see docs/architecture.md
     for exactly what it sets up, if you'd rather do it yourself.
 

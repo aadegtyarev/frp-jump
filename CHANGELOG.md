@@ -6,6 +6,21 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.11] - 2026-09-26
+
+### Added
+
+- **`frp-jump-server install-service` now also installs a thin wrapper at
+  `/usr/local/bin/frp-jump-server`.** The dedicated system account's data
+  directory is `0700` -- previously, only root (or an explicit `sudo -u
+  <name> env FRP_JUMP_DATA_DIR=... <path>`) could run any admin command
+  at all, even though "anyone who can `sudo` on this box is the admin
+  boundary" was always the intent. The wrapper does that transparently:
+  `frp-jump-server users list` (or `devices`/`enroll-tokens`/...) now
+  just works for anyone with sudo rights. `install-service`/`init`/`run`
+  pass straight through unwrapped, since those need to actually run as
+  root or under systemd.
+
 ## [0.3.10] - 2026-09-26
 
 ### Added

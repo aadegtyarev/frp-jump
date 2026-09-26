@@ -28,6 +28,9 @@ def test_install_writes_env_file_and_bootstraps(tmp_path, monkeypatch):
     monkeypatch.setattr(service_install, "ensure_system_user", lambda name: data_dir)
     monkeypatch.setattr(service_install, "_ENV_DIR", env_dir)
     monkeypatch.setattr(service_install, "_SYSTEM_UNIT_DIR", unit_dir)
+    monkeypatch.setattr(
+        service_install, "_ADMIN_WRAPPER_PATH", tmp_path / "usr-local-bin" / "frp-jump-server"
+    )
     monkeypatch.setattr(service_install, "chown_tree", lambda path, name: None)
     monkeypatch.setattr(service_install.shutil, "chown", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -77,6 +80,9 @@ def test_install_writes_tls_paths_instead_of_loopback_when_given(tmp_path, monke
     monkeypatch.setattr(service_install, "ensure_system_user", lambda name: data_dir)
     monkeypatch.setattr(service_install, "_ENV_DIR", env_dir)
     monkeypatch.setattr(service_install, "_SYSTEM_UNIT_DIR", unit_dir)
+    monkeypatch.setattr(
+        service_install, "_ADMIN_WRAPPER_PATH", tmp_path / "usr-local-bin" / "frp-jump-server"
+    )
     monkeypatch.setattr(service_install, "chown_tree", lambda path, name: None)
     monkeypatch.setattr(service_install.shutil, "chown", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -127,6 +133,9 @@ def test_install_reruns_without_relay_public_addr_using_existing_env(tmp_path, m
     monkeypatch.setattr(service_install, "ensure_system_user", lambda name: data_dir)
     monkeypatch.setattr(service_install, "_ENV_DIR", env_dir)
     monkeypatch.setattr(service_install, "_SYSTEM_UNIT_DIR", unit_dir)
+    monkeypatch.setattr(
+        service_install, "_ADMIN_WRAPPER_PATH", tmp_path / "usr-local-bin" / "frp-jump-server"
+    )
     monkeypatch.setattr(service_install, "chown_tree", lambda path, name: None)
     monkeypatch.setattr(
         service_install, "resolve_exec_path", lambda name: "/usr/bin/frp-jump-server"
@@ -151,3 +160,44 @@ def test_read_env_value_finds_the_matching_key(tmp_path):
 
     assert service_install._read_env_value(env_path, "FRP_JUMP_RELAY_PUBLIC_ADDR") == "host.example"
     assert service_install._read_env_value(env_path, "NOT_PRESENT") is None
+
+
+def test_install_writes_an_admin_wrapper_that_sudos_admin_commands(tmp_path, monkeypatch):
+    """The dedicated system account's data dir is 0700 -- without this
+    wrapper, only root (or an explicit `sudo -u <name> env
+    FRP_JUMP_DATA_DIR=...`) could run any admin command at all."""
+    data_dir = tmp_path / "var-lib" / "frp-jump"
+    env_dir = tmp_path / "etc-frp-jump"
+    unit_dir = tmp_path / "etc-systemd"
+    wrapper_path = tmp_path / "usr-local-bin" / "frp-jump-server"
+
+    monkeypatch.setattr(service_install.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(service_install, "ensure_system_user", lambda name: data_dir)
+    monkeypatch.setattr(service_install, "_ENV_DIR", env_dir)
+    monkeypatch.setattr(service_install, "_SYSTEM_UNIT_DIR", unit_dir)
+    monkeypatch.setattr(service_install, "_ADMIN_WRAPPER_PATH", wrapper_path)
+    monkeypatch.setattr(service_install, "chown_tree", lambda path, name: None)
+    monkeypatch.setattr(service_install.shutil, "chown", lambda *a, **k: None)
+    monkeypatch.setattr(
+        service_install, "resolve_exec_path", lambda name: "/usr/bin/frp-jump-server"
+    )
+    monkeypatch.setattr(service_install.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        bootstrap,
+        "initialize",
+        lambda settings: bootstrap.BootstrapResult(
+            data_dir=settings.data_dir, db_path=settings.data_dir / "db.sqlite3", ca_cert_pem=b""
+        ),
+    )
+
+    service_install.install(system_user="frp-jump", relay_public_addr="tunnel.example.com")
+
+    assert wrapper_path.is_file()
+    assert (wrapper_path.stat().st_mode & 0o777) == 0o755
+    content = wrapper_path.read_text()
+    assert f"FRP_JUMP_DATA_DIR={data_dir}" in content
+    assert "sudo -u frp-jump" in content
+    assert "/usr/bin/frp-jump-server" in content
+    # install-service/init/run must pass straight through, unwrapped --
+    # those need to run as root/under systemd, not the service account.
+    assert "install-service|init|run)" in content

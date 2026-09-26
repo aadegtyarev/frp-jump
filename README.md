@@ -271,7 +271,15 @@ system account, bootstraps the CA/database, writes
 (`ProtectSystem=strict`, `NoNewPrivileges=yes`, one writable data
 directory) — matching
 [`packaging/systemd/frp-jump-server.service`](packaging/systemd/frp-jump-server.service)
-if you'd rather set it up by hand.
+if you'd rather set it up by hand. It also installs a thin wrapper at
+`/usr/local/bin/frp-jump-server`: the system account's data directory is
+`0700` (only it, or root, can read the database), so this transparently
+re-runs every admin command (`users`/`devices`/`enroll-tokens`/...) as
+that account via `sudo -u` — anyone who can `sudo` on the box just runs
+`frp-jump-server users list` and it works, no need to remember the
+account name or data directory. `install-service`/`init`/`run` pass
+straight through unwrapped (those need to actually run as root or under
+systemd).
 
 ## Development
 

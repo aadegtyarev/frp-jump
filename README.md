@@ -15,7 +15,9 @@ through your server.
 - **Security**: a private CA (run by your server) issues an mTLS cert to
   every enrolled device, so nothing unenrolled can reach the relay at all;
   a per-pair secret means even enrolled devices can't reach each other's
-  services without an explicit grant. There is no WebUI at all — admin
+  services without an explicit grant. The tunneled traffic itself
+  (p2p or relayed) is encrypted too, not just the control channel. There
+  is no WebUI at all — admin
   actions are `frp-jump-server` commands run over SSH to the box, and a
   person is identified by an SSH public key an admin registers once
   (`users add-key`), not an email/password account. After that person's
@@ -71,7 +73,7 @@ echo "deb [signed-by=/etc/apt/keyrings/frp-jump.gpg] https://aadegtyarev.github.
   | sudo tee /etc/apt/sources.list.d/frp-jump.list
 
 sudo apt update
-sudo apt install frp-jump-client   # or frp-jump-server, on the relay box
+sudo apt install frp-jump-client
 ```
 
 Only `frp-jump-client` is packaged as a `.deb` today (the server side is
@@ -161,6 +163,11 @@ frp-jump-client connect wb01:22                 # wire yourself up to port 22
                                                  # tcp tunnel, or pass --ssh)
 frp-jump-client status                          # see what's exposed/consumed,
                                                  # and local addresses once synced
+frp-jump-client doctor                          # something seems wrong? run this
+                                                 # first -- checks enrollment, the
+                                                 # running service, and that the
+                                                 # client/server protocol versions
+                                                 # still match
 frp-jump-client disconnect wb01                 # tear it back down
 frp-jump-client devices disable old-laptop      # lost it? block its connections
                                                  # without losing the enrollment
@@ -168,7 +175,7 @@ frp-jump-client devices delete old-laptop       # gone for good, frees the name
 ```
 
 Once synced (each side's agent polls every `agent_poll_interval_seconds`,
-default 30s):
+default 2s -- override per-run with `frp-jump-client run --poll-interval N`):
 
 ```sh
 ssh wb01                     # just works -- `connect`'s local profile name

@@ -10,7 +10,7 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ### Added
 
-- **Protocol version reporting**: an unauthenticated `GET /version` route
+- **Protocol version reporting**: an unauthenticated `GET /api/agent/version` route
   on the server, and a matching `frp-jump-client doctor` check, so a
   client and server that fall out of sync (a breaking wire-protocol
   change down the line) detect the mismatch explicitly instead of

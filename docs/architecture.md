@@ -54,6 +54,8 @@ localIP = "127.0.0.1"
 localPort = <service.target_port>
 allowUsers = ["*"]                     # frp's own ACL; the real gate is the
                                         # per-grant secretKey, not this
+transport.useEncryption = true         # the tunneled payload itself, not
+                                        # just the frpc<->frps control channel
 
 [[proxies]]
 name = "<grant-id>-stcp"
@@ -62,6 +64,7 @@ secretKey = "<grant.secret>"
 localIP = "127.0.0.1"
 localPort = <service.target_port>
 allowUsers = ["*"]
+transport.useEncryption = true
 ```
 
 and the consuming device's frpc gets **two** visitors, wired together:
@@ -73,6 +76,7 @@ type = "stcp"
 serverName = "<grant-id>-stcp"
 secretKey = "<grant.secret>"
 bindPort = -1                          # accepts fallback traffic only
+transport.useEncryption = true
 
 [[visitors]]
 name = "<grant-id>-xtcp-visitor"
@@ -83,6 +87,7 @@ bindAddr = "127.0.0.1"
 bindPort = <consumer's persisted local port>
 fallbackTo = "<grant-id>-stcp-visitor"
 fallbackTimeoutMs = <settings.xtcp_fallback_timeout_ms>
+transport.useEncryption = true
 ```
 
 This is entirely frp's own mechanism (`client/visitor/xtcp.go`'s

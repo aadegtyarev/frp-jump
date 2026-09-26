@@ -333,3 +333,25 @@ install frp-jump` never imports them.
   tokens for `wb01` can exist, and whichever redeems second dies with a
   raw DB integrity error instead of a clean conflict message. Covered by
   `tests/unit/test_registry.py::test_create_enroll_token_rejects_duplicate_name_while_unredeemed_token_exists`.
+- **Device certs get `CLIENT_AUTH` only, never `SERVER_AUTH`.**
+  `common/pki.CertificateAuthority.issue(..., server_auth=...)` defaults
+  to `False`; only `bootstrap.load_or_create_relay_cert`'s single call
+  passes `server_auth=True`. A device cert that could also present as a
+  valid relay TLS identity would have no purpose other than letting an
+  on-path device impersonate the relay to others.
+- **The control-plane API hides what it is from anyone just poking at
+  it.** `server/app.py` serves a generic placeholder at `/` and disables
+  FastAPI's auto `/docs`/`/redoc`/`/openapi.json` — a relay box is
+  reachable from the whole internet by construction, no reason to hand
+  an opportunistic scanner a readable schema of what's running there.
+- **The client's default `install-service`/`enroll` account-selection is
+  continuity-first, not "always most isolated."**
+  `agent/service_install.resolve_default_target` prefers an auto-created
+  `frp-jump-client` system account, but only when nothing is enrolled yet
+  at the traditional location (a real person via `sudo`, or root on a
+  no-other-account device) — reusing existing state always wins over
+  picking a "better" account, so a later `sudo install-service` can never
+  orphan an earlier unprivileged `enroll`. It also falls back rather than
+  failing when the dedicated account can't execute the binary at all
+  (`_world_traversable` — e.g. a personal venv under a `750` home
+  directory, increasingly common on newer distros' default).

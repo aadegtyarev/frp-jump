@@ -50,6 +50,10 @@ python3 -m venv .venv    # Debian/Ubuntu: `apt install python3-venv` first
 .venv/bin/frp-jump-client ...
 ```
 
+Both commands are always on `PATH` after either install — `frp-jump-server`
+just tells you to `pip install 'frp-jump[server]'` and exits cleanly if you
+run it on a device-only install.
+
 Put `.venv/bin` on `PATH`, or call the binaries by their full path.
 
 ### Option B: apt repository (Debian/Ubuntu, including Wiren Board)
@@ -86,7 +90,8 @@ sudo apt install ./frp-jump-client_X.Y.Z_arm64.deb
 ```
 
 Every command has full `--help` text with runnable examples — start there
-if anything below is unclear (`frp-jump-client <command> --help`).
+if anything below is unclear (`frp-jump-client <command> --help`). Both
+`frp-jump-client`/`frp-jump-server` also support `--version`.
 
 ## Quick start
 
@@ -153,7 +158,9 @@ frp-jump-client connect wb01:22                 # tunnel to port 22 on "wb01"
                                                  # ports; anything else is a
                                                  # plain tcp tunnel, or --ssh)
 frp-jump-client status                          # what's exposed/consumed,
-                                                 # local addresses once synced
+                                                 # local addresses, and whether
+                                                 # each exposed port is
+                                                 # actually being listened on
 frp-jump-client doctor                          # something seems wrong? run
                                                  # this first
 frp-jump-client disconnect wb01                 # tear it back down
@@ -205,7 +212,10 @@ to start without it.
 `frps_admin_port` (7500) is bound to `127.0.0.1` only and never needs a
 firewall rule either way. `server run` refuses to bind `api_host` to
 anything but `127.0.0.1` without TLS configured, so there's no way to
-end up accidentally serving the API in cleartext to the internet.
+end up accidentally serving the API in cleartext to the internet --
+`FRP_JUMP_ALLOW_INSECURE_BIND=true` is the explicit override, for the
+rare case TLS is genuinely terminated elsewhere on a path this process
+can't see.
 
 **On every client device**, allow *outbound* to the relay's `relay_bind_port`
 and whichever port actually reaches the control-plane API. p2p (`xtcp`)
@@ -219,7 +229,8 @@ only ever bound to `127.0.0.1`, so it never needs a firewall rule either.
 
 ## systemd
 
-**Client** — `frp-jump-client install-service [--user]` generates and
+**Client** — `frp-jump-client install-service [--user | --system-user
+NAME]` generates and
 enables the unit for you (see "Quick start" above). By default, a
 dedicated, unprivileged `frp-jump-client` system account is created
 automatically — least-privilege, zero extra thinking. Which mode to pick:

@@ -69,17 +69,19 @@ class Settings(BaseSettings):
     # when running as a dedicated service account that isn't the human's login.
     ssh_config_path: Path | None = None
 
-    # token / session lifetimes
+    # token lifetimes
     enroll_token_ttl_hours: int = 24
-    login_token_ttl_minutes: int = 60
-    session_ttl_days: int = 30
+    # How long a POST /enroll/challenge nonce stays redeemable. Short on
+    # purpose -- signing it is a local, near-instant operation on the
+    # enrolling device, this only needs to survive one HTTP round trip.
+    enroll_challenge_ttl_seconds: int = 120
 
-    # webui
-    webui_host: str = "0.0.0.0"
-    webui_port: int = 8443
+    # control-plane API
+    api_host: str = "0.0.0.0"
+    api_port: int = 8443
     tls_cert_file: Path | None = None
     tls_key_file: Path | None = None
-    # Used only to render clickable links (the admin login link); e.g. "https://tunnel.example.com".
+    # Used only to render clickable enroll URLs, e.g. "https://tunnel.example.com".
     public_base_url: str | None = None
 
     @classmethod

@@ -13,6 +13,9 @@
 #   FRP_JUMP_VERSION  exact version to install from PyPI (must already be
 #                  published -- this Dockerfile does not build frp-jump
 #                  itself, only packages the already-released wheel)
+#   NEEDS_C_TOOLCHAIN  "true" only for armhf (see build.sh) -- amd64/arm64
+#                  have prebuilt `cryptography`/`cffi` wheels and never
+#                  need apt at all, so they never touch it
 ARG BASE_PLATFORM
 
 # Runs natively (build host arch, no QEMU) -- fetches uv's own release
@@ -30,12 +33,31 @@ RUN curl -fSL --retry 5 --retry-all-errors --retry-delay 3 \
 FROM --platform=$BASE_PLATFORM debian:bullseye-slim AS build
 COPY --from=fetch-uv /usr/local/bin/uv /usr/local/bin/uv
 
+ARG NEEDS_C_TOOLCHAIN=false
+
 # armv7 (WB7 and earlier) has no prebuilt `cffi` wheel on PyPI
 # (cryptography's C-extension dependency) -- unlike amd64/arm64, it must
 # compile from source, which needs a C toolchain. Installed only in this
-# throwaway build image, never on the device itself.
-RUN apt-get update -qq && apt-get install -qq -y --no-install-recommends gcc libffi-dev libc6-dev \
-    && rm -rf /var/lib/apt/lists/*
+# throwaway build image, never on the device itself -- and only for
+# armv7, so amd64/arm64 never touch apt at all (see the mirror note below
+# for why that's worth avoiding when it's not actually needed).
+RUN if [ "$NEEDS_C_TOOLCHAIN" = "true" ]; then \
+        # Debian 11 (bullseye) is past standard support --
+        # deb.debian.org/security.debian.org can 404 on a package version
+        # this image's baked Packages index still expects (a live mirror
+        # drifting out from under an EOL release). snapshot.debian.org's
+        # frozen archive at this image's own build date is self-consistent
+        # by construction; the base image already ships these lines
+        # commented out, pointed at exactly that date. \
+        sed -i \
+            -e 's|^# deb http://snapshot|deb http://snapshot|' \
+            -e 's|^deb http://deb\.debian\.org|# deb http://deb.debian.org|' \
+            /etc/apt/sources.list \
+        && echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until \
+        && apt-get update -qq \
+        && apt-get install -qq -y --no-install-recommends gcc libffi-dev libc6-dev \
+        && rm -rf /var/lib/apt/lists/* ; \
+    fi
 
 ARG PY_VERSION=3.12
 ARG PREFIX=/opt/frp-jump-client

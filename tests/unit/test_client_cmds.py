@@ -59,12 +59,96 @@ def test_connect_auto_disambiguates_a_second_port_on_the_same_device(tmp_path, m
     )
     monkeypatch.setattr(client_cmds, "_wait_for_local_port", lambda data_dir, grant_id: 40002)
 
-    result = runner.invoke(client_cmds.app, ["connect", "wb02:8080", "--protocol", "http"])
+    result = runner.invoke(client_cmds.app, ["connect", "wb02:8080"])
 
     assert result.exit_code == 0, result.output
     reloaded = load(tmp_path)
     assert reloaded.profiles["wb02"] == Profile(device_name="wb02", target_port=22)
     assert reloaded.profiles["wb02-8080"] == Profile(device_name="wb02", target_port=8080)
+
+
+def test_connect_classifies_well_known_ssh_ports_automatically(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    captured = {}
+
+    def fake_connect(state, *, device_name, target_port, protocol):
+        captured["protocol"] = protocol
+        return {"grant_id": "g1"}
+
+    monkeypatch.setattr(poller, "connect", fake_connect)
+    monkeypatch.setattr(client_cmds, "_wait_for_local_port", lambda data_dir, grant_id: 40001)
+
+    result = runner.invoke(client_cmds.app, ["connect", "wb02:22"])
+
+    assert result.exit_code == 0, result.output
+    from frp_jump.driver.base import ServiceProtocol
+
+    assert captured["protocol"] == ServiceProtocol.SSH
+
+
+def test_connect_classifies_other_ports_as_tcp_by_default(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    captured = {}
+
+    def fake_connect(state, *, device_name, target_port, protocol):
+        captured["protocol"] = protocol
+        return {"grant_id": "g1"}
+
+    monkeypatch.setattr(poller, "connect", fake_connect)
+    monkeypatch.setattr(client_cmds, "_wait_for_local_port", lambda data_dir, grant_id: 40001)
+
+    result = runner.invoke(client_cmds.app, ["connect", "wb02:8080"])
+
+    assert result.exit_code == 0, result.output
+    from frp_jump.driver.base import ServiceProtocol
+
+    assert captured["protocol"] == ServiceProtocol.TCP
+
+
+def test_connect_ssh_flag_forces_ssh_classification_for_a_nonstandard_port(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    captured = {}
+
+    def fake_connect(state, *, device_name, target_port, protocol):
+        captured["protocol"] = protocol
+        return {"grant_id": "g1"}
+
+    monkeypatch.setattr(poller, "connect", fake_connect)
+    monkeypatch.setattr(client_cmds, "_wait_for_local_port", lambda data_dir, grant_id: 40001)
+
+    result = runner.invoke(client_cmds.app, ["connect", "wb02:2200", "--ssh"])
+
+    assert result.exit_code == 0, result.output
+    from frp_jump.driver.base import ServiceProtocol
+
+    assert captured["protocol"] == ServiceProtocol.SSH
+
+
+def test_connect_local_port_pins_the_port_in_state(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    monkeypatch.setattr(
+        poller,
+        "connect",
+        lambda state, *, device_name, target_port, protocol: {"grant_id": "g1"},
+    )
+    monkeypatch.setattr(poller, "is_bindable", lambda port: True)
+    monkeypatch.setattr(client_cmds, "_wait_for_local_port", lambda data_dir, grant_id: 40777)
+
+    result = runner.invoke(client_cmds.app, ["connect", "wb02:22", "--local-port", "40777"])
+
+    assert result.exit_code == 0, result.output
+    assert load(tmp_path).local_ports["g1"] == 40777
+
+
+def test_connect_rejects_a_local_port_already_in_use(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    monkeypatch.setattr(poller, "connect", lambda *a, **k: pytest.fail("should not be called"))
+    monkeypatch.setattr(poller, "is_bindable", lambda port: False)
+
+    result = runner.invoke(client_cmds.app, ["connect", "wb02:22", "--local-port", "40777"])
+
+    assert result.exit_code == 1
+    assert "not free" in result.output
 
 
 def test_connect_shows_a_fallback_message_when_no_local_port_appears(tmp_path, monkeypatch):
@@ -84,7 +168,8 @@ def test_connect_rejects_a_target_without_a_colon(tmp_path):
     _enrolled_state(tmp_path)
     result = runner.invoke(client_cmds.app, ["connect", "wb02"])
     assert result.exit_code != 0
-    assert "DEVICE:PORT" in result.output
+    assert "no profile named" in result.output
+    assert "DEVICE:22" in result.output
 
 
 def test_connect_rejects_reusing_an_as_name_for_a_different_target(tmp_path, monkeypatch):
@@ -97,18 +182,6 @@ def test_connect_rejects_reusing_an_as_name_for_a_different_target(tmp_path, mon
     assert "already used" in result.output
 
 
-def test_connect_rejects_unknown_protocol(tmp_path, monkeypatch):
-    _enrolled_state(tmp_path)
-    monkeypatch.setattr(poller, "connect", lambda *a, **k: pytest.fail("should not be called"))
-
-    result = runner.invoke(
-        client_cmds.app, ["connect", "wb02:22", "--protocol", "carrier-pigeon"]
-    )
-
-    assert result.exit_code == 1
-    assert "unknown protocol" in result.output
-
-
 def test_disconnect_tears_down_the_tunnel_but_keeps_the_profile(tmp_path, monkeypatch):
     """Profiles are persistent saved shortcuts, independent of whether the
     tunnel is currently up -- `disconnect` only brings the tunnel down;
@@ -116,15 +189,20 @@ def test_disconnect_tears_down_the_tunnel_but_keeps_the_profile(tmp_path, monkey
     _enrolled_state(tmp_path, profiles={"wb02": Profile(device_name="wb02", target_port=22)})
     called = {}
 
-    def fake_disconnect(state, *, device_name, target_port):
-        called.update(device_name=device_name, target_port=target_port)
+    def fake_disconnect(state, *, device_name, target_port, consumer_device_name=None):
+        called.update(
+            device_name=device_name, target_port=target_port,
+            consumer_device_name=consumer_device_name,
+        )
 
     monkeypatch.setattr(poller, "disconnect", fake_disconnect)
 
     result = runner.invoke(client_cmds.app, ["disconnect", "wb02"])
 
     assert result.exit_code == 0, result.output
-    assert called == {"device_name": "wb02", "target_port": 22}
+    assert called == {
+        "device_name": "wb02", "target_port": 22, "consumer_device_name": None,
+    }
     assert load(tmp_path).profiles == {"wb02": Profile(device_name="wb02", target_port=22)}
 
 
@@ -141,7 +219,7 @@ def test_disconnect_accepts_device_port_directly_without_a_profile(tmp_path, mon
     _enrolled_state(tmp_path)
     called = {}
 
-    def fake_disconnect(state, *, device_name, target_port):
+    def fake_disconnect(state, *, device_name, target_port, consumer_device_name=None):
         called.update(device_name=device_name, target_port=target_port)
 
     monkeypatch.setattr(poller, "disconnect", fake_disconnect)
@@ -150,6 +228,58 @@ def test_disconnect_accepts_device_port_directly_without_a_profile(tmp_path, mon
 
     assert result.exit_code == 0, result.output
     assert called == {"device_name": "wb02", "target_port": 22}
+
+
+def test_disconnect_from_a_different_device_passes_it_through_and_confirms(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    called = {}
+
+    def fake_disconnect(state, *, device_name, target_port, consumer_device_name=None):
+        called.update(
+            device_name=device_name, target_port=target_port,
+            consumer_device_name=consumer_device_name,
+        )
+
+    monkeypatch.setattr(poller, "disconnect", fake_disconnect)
+
+    result = runner.invoke(
+        client_cmds.app, ["disconnect", "wb02:22", "--from", "phone"], input="y\n"
+    )
+
+    assert result.exit_code == 0, result.output
+    assert called == {
+        "device_name": "wb02", "target_port": 22, "consumer_device_name": "phone",
+    }
+
+
+def test_disconnect_from_a_different_device_aborts_without_confirmation(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    monkeypatch.setattr(poller, "disconnect", lambda *a, **k: pytest.fail("should not be called"))
+
+    result = runner.invoke(
+        client_cmds.app, ["disconnect", "wb02:22", "--from", "phone"], input="n\n"
+    )
+
+    assert result.exit_code == 0
+
+
+def test_disconnect_from_a_different_device_skips_confirmation_with_yes(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    called = {}
+    monkeypatch.setattr(
+        poller,
+        "disconnect",
+        lambda state, *, device_name, target_port, consumer_device_name=None: called.update(
+            consumer_device_name=consumer_device_name
+        ),
+    )
+
+    result = runner.invoke(
+        client_cmds.app, ["disconnect", "wb02:22", "--from", "phone", "--yes"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert called == {"consumer_device_name": "phone"}
 
 
 def test_connect_reconnects_by_existing_profile_name(tmp_path, monkeypatch):
@@ -211,7 +341,7 @@ def test_profiles_delete_rejects_an_unknown_name(tmp_path):
     assert "no such profile" in result.output
 
 
-def test_add_device_without_a_name_shows_the_placeholder_flag(tmp_path, monkeypatch):
+def test_devices_add_token_without_a_name_shows_the_placeholder_flag(tmp_path, monkeypatch):
     _enrolled_state(tmp_path)
     monkeypatch.setattr(
         poller,
@@ -219,69 +349,160 @@ def test_add_device_without_a_name_shows_the_placeholder_flag(tmp_path, monkeypa
         lambda state, *, device_name_hint=None: {"token": "newtok", "device_name_hint": None},
     )
 
-    result = runner.invoke(client_cmds.app, ["add-device"])
+    result = runner.invoke(client_cmds.app, ["devices", "add-token"])
 
     assert result.exit_code == 0, result.output
     assert "enroll https://ctl.example.com newtok --name <pick-a-name>" in result.output
 
 
-def test_delete_device_requires_confirmation_without_yes(tmp_path, monkeypatch):
+def test_devices_delete_requires_confirmation_without_yes(tmp_path, monkeypatch):
     _enrolled_state(tmp_path)
     monkeypatch.setattr(
         poller, "delete_device", lambda *a, **k: pytest.fail("should not be called")
     )
 
-    result = runner.invoke(client_cmds.app, ["delete-device", "old-laptop"], input="n\n")
+    result = runner.invoke(client_cmds.app, ["devices", "delete", "old-laptop"], input="n\n")
 
     assert result.exit_code == 0
     assert "Deleted" not in result.output
 
 
-def test_delete_device_with_yes_skips_confirmation(tmp_path, monkeypatch):
+def test_devices_delete_with_yes_skips_confirmation(tmp_path, monkeypatch):
     _enrolled_state(tmp_path)
     called = []
     monkeypatch.setattr(poller, "delete_device", lambda state, name: called.append(name))
 
-    result = runner.invoke(client_cmds.app, ["delete-device", "old-laptop", "--yes"])
+    result = runner.invoke(client_cmds.app, ["devices", "delete", "old-laptop", "--yes"])
 
     assert result.exit_code == 0, result.output
     assert called == ["old-laptop"]
 
 
-def test_list_shows_devices_from_the_server(tmp_path, monkeypatch):
+def test_devices_disable_calls_poller(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    called = []
+    monkeypatch.setattr(poller, "disable_device", lambda state, name: called.append(name))
+
+    result = runner.invoke(client_cmds.app, ["devices", "disable", "old-laptop"])
+
+    assert result.exit_code == 0, result.output
+    assert called == ["old-laptop"]
+    assert "Disabled" in result.output
+
+
+def test_devices_enable_calls_poller(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    called = []
+    monkeypatch.setattr(poller, "enable_device", lambda state, name: called.append(name))
+
+    result = runner.invoke(client_cmds.app, ["devices", "enable", "old-laptop"])
+
+    assert result.exit_code == 0, result.output
+    assert called == ["old-laptop"]
+    assert "Enabled" in result.output
+
+
+def test_devices_list_shows_devices_from_the_server(tmp_path, monkeypatch):
     _enrolled_state(tmp_path)
     monkeypatch.setattr(
         poller,
         "list_devices",
         lambda state: [
-            {"name": "wb01", "revoked": False, "last_seen_at": None},
-            {"name": "old", "revoked": True, "last_seen_at": "2024-01-01T00:00:00"},
+            {"name": "wb01", "enabled": True, "last_seen_at": None},
+            {"name": "old", "enabled": False, "last_seen_at": "2024-01-01T00:00:00"},
         ],
     )
 
-    result = runner.invoke(client_cmds.app, ["list"])
+    result = runner.invoke(client_cmds.app, ["devices", "list"])
 
     assert result.exit_code == 0, result.output
     assert "wb01" in result.output
     assert "old" in result.output
 
 
+def test_set_key_signs_the_challenge_with_the_private_key(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    key_path = tmp_path / "new_key"
+    key_path.write_text("private-key-material")
+    key_path.with_suffix(".pub").write_text("ssh-ed25519 AAAA... me@host\n")
+    called = []
+    monkeypatch.setattr(
+        poller,
+        "set_key",
+        lambda state, identity_path, public_key: called.append((identity_path, public_key)),
+    )
+
+    result = runner.invoke(client_cmds.app, ["set-key", str(key_path)])
+
+    assert result.exit_code == 0, result.output
+    assert called == [(key_path, "ssh-ed25519 AAAA... me@host\n")]
+
+
+def test_set_key_accepts_the_pub_sibling_too(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    key_path = tmp_path / "new_key"
+    key_path.write_text("private-key-material")
+    key_path.with_suffix(".pub").write_text("ssh-ed25519 AAAA... me@host\n")
+    called = []
+    monkeypatch.setattr(
+        poller,
+        "set_key",
+        lambda state, identity_path, public_key: called.append((identity_path, public_key)),
+    )
+
+    result = runner.invoke(client_cmds.app, ["set-key", str(key_path.with_suffix(".pub"))])
+
+    assert result.exit_code == 0, result.output
+    assert called == [(key_path, "ssh-ed25519 AAAA... me@host\n")]
+
+
+def test_set_key_rejects_a_missing_pub_file(tmp_path):
+    _enrolled_state(tmp_path)
+    key_path = tmp_path / "new_key"
+    key_path.write_text("private-key-material")
+
+    result = runner.invoke(client_cmds.app, ["set-key", str(key_path)])
+
+    assert result.exit_code == 1
+    assert "could not find" in result.output
+
+
+def test_set_key_rejects_an_empty_pub_file(tmp_path):
+    _enrolled_state(tmp_path)
+    key_path = tmp_path / "new_key"
+    key_path.write_text("private-key-material")
+    key_path.with_suffix(".pub").write_text("")
+
+    result = runner.invoke(client_cmds.app, ["set-key", str(key_path)])
+
+    assert result.exit_code == 1
+    assert "empty" in result.output
+
+
 def test_commands_require_enrollment_first(tmp_path):
-    for args in (["list"], ["connect", "wb01:22"], ["disconnect", "wb01"], ["add-device"]):
+    commands = (
+        ["devices", "list"],
+        ["connect", "wb01:22"],
+        ["disconnect", "wb01"],
+        ["devices", "add-token"],
+        ["set-key", "some.pub"],
+        ["install-service"],
+    )
+    for args in commands:
         result = runner.invoke(client_cmds.app, args)
-        assert result.exit_code == 1
-        assert "not enrolled" in result.output
+        assert result.exit_code == 1, args
+        assert "not enrolled" in result.output, args
 
 
 def test_disconnect_succeeds_and_keeps_the_profile_even_if_already_gone_server_side(
     tmp_path, monkeypatch
 ):
     """If the grant already disappeared server-side (device deleted, admin
-    revoked it), disconnect is still a success (the desired end state --
+    disabled it), disconnect is still a success (the desired end state --
     not connected -- is reached either way), and the profile is untouched."""
     _enrolled_state(tmp_path, profiles={"wb02": Profile(device_name="wb02", target_port=22)})
 
-    def fake_disconnect(state, *, device_name, target_port):
+    def fake_disconnect(state, *, device_name, target_port, consumer_device_name=None):
         raise poller.NotConnectedError("not connected")
 
     monkeypatch.setattr(poller, "disconnect", fake_disconnect)
@@ -292,7 +513,7 @@ def test_disconnect_succeeds_and_keeps_the_profile_even_if_already_gone_server_s
     assert load(tmp_path).profiles == {"wb02": Profile(device_name="wb02", target_port=22)}
 
 
-def test_delete_device_prunes_profiles_pointing_at_the_deleted_device(tmp_path, monkeypatch):
+def test_devices_delete_prunes_profiles_pointing_at_the_deleted_device(tmp_path, monkeypatch):
     _enrolled_state(
         tmp_path,
         profiles={
@@ -302,7 +523,7 @@ def test_delete_device_prunes_profiles_pointing_at_the_deleted_device(tmp_path, 
     )
     monkeypatch.setattr(poller, "delete_device", lambda state, name: None)
 
-    result = runner.invoke(client_cmds.app, ["delete-device", "old-laptop", "--yes"])
+    result = runner.invoke(client_cmds.app, ["devices", "delete", "old-laptop", "--yes"])
 
     assert result.exit_code == 0, result.output
     assert list(load(tmp_path).profiles) == ["other"]

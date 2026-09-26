@@ -13,8 +13,13 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 
-# NOTE: whether to install this as a system unit (above) or a --user unit
-# depends on what this device does:
+# NOTE: `frp-jump-client install-service` (system-wide) / `install-service
+# --user` generates and enables a unit like this one for you -- run as
+# root, `enroll` does this automatically. This file is for a manual/
+# packaged install instead (e.g. the .deb, see packaging/deb/).
+#
+# Whether to install as a system unit (above) or a --user unit depends on
+# what this device does:
 #
 # - Exposer-only (e.g. a Wiren Board controller offering its own SSH/HTTP,
 #   consuming nothing): a system service is fine, ssh_config management is

@@ -1,4 +1,6 @@
+import base64
 import socket
+import subprocess
 
 import httpx
 import pytest
@@ -445,7 +447,7 @@ def test_add_device_raises_sync_error_on_failure(monkeypatch) -> None:
 
 def test_list_devices_returns_parsed_json(monkeypatch) -> None:
     state = _state()
-    payload = [{"name": "wb01", "enrolled_at": "x", "last_seen_at": None, "revoked": False}]
+    payload = [{"name": "wb01", "enrolled_at": "x", "last_seen_at": None, "enabled": True}]
 
     def fake_get(url, *, headers, timeout):
         assert url == "http://ctl.example.com/api/agent/devices"
@@ -533,7 +535,29 @@ def test_disconnect_posts_device_and_port(monkeypatch) -> None:
     poller.disconnect(state, device_name="wb01", target_port=22)
 
     assert captured["url"] == "http://ctl.example.com/api/agent/disconnect"
-    assert captured["json"] == {"device_name": "wb01", "target_port": 22}
+    assert captured["json"] == {
+        "device_name": "wb01",
+        "target_port": 22,
+        "consumer_device_name": None,
+    }
+
+
+def test_disconnect_passes_through_consumer_device_name(monkeypatch) -> None:
+    state = _state()
+    captured = {}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured.update(url=url, json=json)
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    poller.disconnect(state, device_name="wb01", target_port=22, consumer_device_name="phone")
+
+    assert captured["json"] == {
+        "device_name": "wb01",
+        "target_port": 22,
+        "consumer_device_name": "phone",
+    }
 
 
 def test_disconnect_raises_sync_error_when_not_connected(monkeypatch) -> None:
@@ -661,3 +685,119 @@ def test_sync_once_does_not_clobber_a_profile_added_by_a_concurrent_cli_command(
 
     reloaded = load(tmp_path)
     assert reloaded.profiles == {"wb01": Profile(device_name="wb01", target_port=22)}
+
+
+def test_disable_device_posts_to_the_disable_endpoint(monkeypatch) -> None:
+    state = _state()
+    captured = {}
+
+    def fake_post(url, *, headers, timeout):
+        captured["url"] = url
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    poller.disable_device(state, "laptop")
+    assert captured["url"] == "http://ctl.example.com/api/agent/devices/laptop/disable"
+
+
+def test_enable_device_posts_to_the_enable_endpoint(monkeypatch) -> None:
+    state = _state()
+    captured = {}
+
+    def fake_post(url, *, headers, timeout):
+        captured["url"] = url
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    poller.enable_device(state, "laptop")
+    assert captured["url"] == "http://ctl.example.com/api/agent/devices/laptop/enable"
+
+
+def test_disable_device_raises_sync_error_on_failure(monkeypatch) -> None:
+    state = _state()
+
+    def fake_post(url, *, headers, timeout):
+        return httpx.Response(404, text="nope", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    with pytest.raises(poller.SyncError):
+        poller.disable_device(state, "laptop")
+
+
+def _make_keypair(tmp_path):
+    key_path = tmp_path / "id"
+    subprocess.run(
+        ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(key_path)],
+        check=True,
+        capture_output=True,
+    )
+    return key_path, key_path.with_suffix(".pub").read_text()
+
+
+def _fake_challenge_response(url: str) -> httpx.Response:
+    challenge = base64.b64encode(b"nonce-bytes").decode("ascii")
+    return httpx.Response(
+        200,
+        json={"challenge_id": "chal-1", "challenge": challenge},
+        request=httpx.Request("POST", url),
+    )
+
+
+def test_set_key_signs_the_challenge_and_posts_the_signature(monkeypatch, tmp_path) -> None:
+    key_path, public_key = _make_keypair(tmp_path)
+    state = _state()
+    calls = []
+
+    def fake_post(url, *, json, headers, timeout):
+        calls.append((url, json))
+        if url.endswith("/set-key/challenge"):
+            return _fake_challenge_response(url)
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    poller.set_key(state, key_path, public_key)
+
+    assert calls[0][0] == "http://ctl.example.com/api/agent/users/set-key/challenge"
+    assert calls[0][1] == {"public_key": public_key}
+    assert calls[1][0] == "http://ctl.example.com/api/agent/users/set-key"
+    assert calls[1][1]["challenge_id"] == "chal-1"
+    assert "signature" in calls[1][1]
+
+
+def test_set_key_raises_sync_error_when_the_challenge_step_fails(monkeypatch, tmp_path) -> None:
+    key_path, public_key = _make_keypair(tmp_path)
+    state = _state()
+
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(409, text="conflict", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    with pytest.raises(poller.SyncError):
+        poller.set_key(state, key_path, public_key)
+
+
+def test_set_key_raises_sync_error_when_the_final_step_fails(monkeypatch, tmp_path) -> None:
+    key_path, public_key = _make_keypair(tmp_path)
+    state = _state()
+
+    def fake_post(url, *, json, headers, timeout):
+        if url.endswith("/set-key/challenge"):
+            return _fake_challenge_response(url)
+        return httpx.Response(409, text="conflict", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    with pytest.raises(poller.SyncError):
+        poller.set_key(state, key_path, public_key)
+
+
+def test_is_bindable_reports_a_free_port_as_bindable() -> None:
+    assert poller.is_bindable(40009) is True
+
+
+def test_is_bindable_reports_an_in_use_port_as_not_bindable() -> None:
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.bind(("127.0.0.1", 40008))
+    try:
+        assert poller.is_bindable(40008) is False
+    finally:
+        blocker.close()

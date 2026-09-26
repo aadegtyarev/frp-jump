@@ -12,6 +12,18 @@ actually ended up peer-to-peer or fell back to relay — there is no
 ``client/api_router.go``, dev branch). So ``status()`` reports per-grant
 state as ``UNKNOWN`` for now; see docs/architecture.md for how to improve
 this later (e.g. tailing frpc's log for hole-punch/fallback messages).
+
+Traffic accounting (see ``fetch_proxy_traffic``) has the mirror-image
+limitation, verified by reading fatedier/frp's own source
+(``server/proxy/xtcp.go`` vs. ``server/proxy/stcp.go``/``proxy.go``): frps
+only ever counts bytes for a proxy whose data actually flows through it.
+A grant's ``stcp`` proxy always does (relay, by construction), so frps's
+own admin API gives real numbers for it; a grant's ``xtcp`` proxy, when
+hole-punching succeeds, carries data directly between the two frpc
+processes, entirely bypassing frps -- and neither frps nor frpc counts
+that anywhere. So relayed bytes are the only traffic this project can
+ever report; a fully peer-to-peer grant is invisible to any counter and
+reports zero despite carrying real traffic.
 """
 
 from __future__ import annotations
@@ -19,6 +31,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import httpx
 import tomli_w
 
 from frp_jump.common.pki import write_private_key
@@ -27,12 +40,35 @@ from frp_jump.driver.base import (
     DriverStatus,
     RelayState,
 )
-from frp_jump.driver.frp.config import build_frpc_config, build_frps_config
+from frp_jump.driver.frp.config import build_frpc_config, build_frps_config, stcp_proxy_name
 from frp_jump.driver.frp.process import ProcessSupervisor, SubprocessSupervisor
 
 
 def _fingerprint(config: dict) -> str:
     return hashlib.sha256(tomli_w.dumps(config).encode("utf-8")).hexdigest()
+
+
+def fetch_proxy_traffic(
+    admin_port: int, grant_id: str, *, timeout: float = 5.0
+) -> tuple[int, int] | None:
+    """Query the relay's own local admin API for one grant's *relayed*
+    traffic -- frps's ``todayTrafficIn``/``todayTrafficOut`` counters for
+    its ``stcp`` proxy (see this module's docstring for why that's the
+    only traffic frp itself ever tracks). Returns ``(bytes_in, bytes_out)``
+    -- a same-day rolling counter, not a since-this-connection total -- or
+    ``None`` if frps isn't reachable or has no record of this grant yet
+    (nothing has connected through it)."""
+    try:
+        resp = httpx.get(
+            f"http://127.0.0.1:{admin_port}/api/proxy/stcp/{stcp_proxy_name(grant_id)}",
+            timeout=timeout,
+        )
+    except httpx.HTTPError:
+        return None
+    if resp.status_code != 200:
+        return None
+    body = resp.json()
+    return body.get("todayTrafficIn", 0), body.get("todayTrafficOut", 0)
 
 
 def _write_tls_files(

@@ -4,6 +4,7 @@ tunnel driver and ssh config to match it.
 
 from __future__ import annotations
 
+import base64
 import logging
 import socket
 import time
@@ -14,6 +15,7 @@ import httpx
 
 from frp_jump.agent import hosts
 from frp_jump.agent.state import AgentState, load, save, wake_path
+from frp_jump.common import ssh_signing
 from frp_jump.common.api import AGENT_API_PREFIX
 from frp_jump.driver.base import (
     ConsumedGrant,
@@ -35,6 +37,13 @@ _HTTP_TIMEOUT_SECONDS = 15.0
 # `disconnect` feel closely to instant, long enough not to matter for CPU.
 _WAKE_CHECK_INTERVAL_SECONDS = 1.0
 
+# A failed cycle (server unreachable, network down, ...) retries sooner
+# than a healthy cycle's normal poll interval, backing off exponentially
+# on repeated failures so a prolonged outage doesn't hammer the server the
+# moment it comes back -- reset to the floor as soon as a cycle succeeds.
+BACKOFF_INITIAL_SECONDS = 5.0
+BACKOFF_MAX_SECONDS = 90.0
+
 
 class SyncError(RuntimeError):
     pass
@@ -47,7 +56,7 @@ class NotConnectedError(SyncError):
     rather than as a real failure, unlike other `SyncError`s."""
 
 
-def _is_bindable(port: int) -> bool:
+def is_bindable(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -65,7 +74,7 @@ def _allocate_local_port(port_range: range, taken: set[int]) -> int:
     asking the OS for `:0`, makes that collision rare instead of routine.
     """
     for port in port_range:
-        if port not in taken and _is_bindable(port):
+        if port not in taken and is_bindable(port):
             return port
     raise SyncError(f"no free local port in range {port_range.start}-{port_range.stop - 1}")
 
@@ -110,7 +119,7 @@ def add_device(
     device_name_hint: str | None = None,
     timeout: float = _HTTP_TIMEOUT_SECONDS,
 ) -> dict:
-    """`client add-device`: mint an enroll token for one more device owned by
+    """`client devices add-token`: mint an enroll token for one more device owned by
     the same person as this one. Returns the server's JSON body (``token``,
     ``device_name_hint``, ``expires_at``)."""
     try:
@@ -128,7 +137,7 @@ def add_device(
 
 
 def list_devices(state: AgentState, *, timeout: float = _HTTP_TIMEOUT_SECONDS) -> list[dict]:
-    """`client list`: every device owned by the same person as this one."""
+    """`client devices list`: every device owned by the same person as this one."""
     try:
         resp = httpx.get(
             f"{state.control_url}{AGENT_API_PREFIX}/devices",
@@ -145,7 +154,7 @@ def list_devices(state: AgentState, *, timeout: float = _HTTP_TIMEOUT_SECONDS) -
 def delete_device(
     state: AgentState, device_name: str, *, timeout: float = _HTTP_TIMEOUT_SECONDS
 ) -> None:
-    """`client delete-device`: permanently remove one of your own devices."""
+    """`client devices delete`: permanently remove one of your own devices."""
     try:
         resp = httpx.post(
             f"{state.control_url}{AGENT_API_PREFIX}/devices/{quote(device_name, safe='')}/delete",
@@ -156,6 +165,84 @@ def delete_device(
         raise SyncError(f"could not reach {state.control_url}: {exc}") from exc
     if resp.status_code != 204:
         raise SyncError(f"delete-device failed ({resp.status_code}): {resp.text}")
+
+
+def _set_device_enabled(
+    state: AgentState, device_name: str, *, enabled: bool, timeout: float = _HTTP_TIMEOUT_SECONDS
+) -> None:
+    action = "enable" if enabled else "disable"
+    try:
+        resp = httpx.post(
+            f"{state.control_url}{AGENT_API_PREFIX}/devices/"
+            f"{quote(device_name, safe='')}/{action}",
+            headers=_auth_headers(state),
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        raise SyncError(f"could not reach {state.control_url}: {exc}") from exc
+    if resp.status_code != 204:
+        raise SyncError(f"{action} failed ({resp.status_code}): {resp.text}")
+
+
+def disable_device(
+    state: AgentState, device_name: str, *, timeout: float = _HTTP_TIMEOUT_SECONDS
+) -> None:
+    """`client devices disable`: tear down and block connections for one of
+    your own devices, without losing its enrollment."""
+    _set_device_enabled(state, device_name, enabled=False, timeout=timeout)
+
+
+def enable_device(
+    state: AgentState, device_name: str, *, timeout: float = _HTTP_TIMEOUT_SECONDS
+) -> None:
+    """`client devices enable`: undo `disable_device`."""
+    _set_device_enabled(state, device_name, enabled=True, timeout=timeout)
+
+
+def set_key(
+    state: AgentState,
+    identity_path: Path,
+    public_key: str,
+    *,
+    timeout: float = _HTTP_TIMEOUT_SECONDS,
+) -> None:
+    """`client set-key`: rotate this device's owner's SSH key to
+    ``public_key``, proving possession of its private half
+    (``identity_path``) via a signed challenge -- a bearer token alone
+    must not be enough to repoint the account at a key nobody actually
+    holds."""
+    try:
+        resp = httpx.post(
+            f"{state.control_url}{AGENT_API_PREFIX}/users/set-key/challenge",
+            json={"public_key": public_key},
+            headers=_auth_headers(state),
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        raise SyncError(f"could not reach {state.control_url}: {exc}") from exc
+    if resp.status_code != 200:
+        raise SyncError(f"set-key failed ({resp.status_code}): {resp.text}")
+    challenge = resp.json()
+
+    try:
+        signature = ssh_signing.sign(identity_path, base64.b64decode(challenge["challenge"]))
+    except ssh_signing.SshSigningError as exc:
+        raise SyncError(f"could not sign the challenge with {identity_path}: {exc}") from exc
+
+    try:
+        resp = httpx.post(
+            f"{state.control_url}{AGENT_API_PREFIX}/users/set-key",
+            json={
+                "challenge_id": challenge["challenge_id"],
+                "signature": base64.b64encode(signature).decode("ascii"),
+            },
+            headers=_auth_headers(state),
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        raise SyncError(f"could not reach {state.control_url}: {exc}") from exc
+    if resp.status_code != 204:
+        raise SyncError(f"set-key failed ({resp.status_code}): {resp.text}")
 
 
 def connect(
@@ -188,13 +275,24 @@ def connect(
 
 
 def disconnect(
-    state: AgentState, *, device_name: str, target_port: int, timeout: float = _HTTP_TIMEOUT_SECONDS
+    state: AgentState,
+    *,
+    device_name: str,
+    target_port: int,
+    consumer_device_name: str | None = None,
+    timeout: float = _HTTP_TIMEOUT_SECONDS,
 ) -> None:
-    """`client disconnect`: drop a connection this device made with `connect`."""
+    """`client disconnect`: drop a connection made with `connect`, from this
+    device (default) or, via ``consumer_device_name``, any other device
+    owned by the same person -- see `--from` in `client_cmds.disconnect`."""
     try:
         resp = httpx.post(
             f"{state.control_url}{AGENT_API_PREFIX}/disconnect",
-            json={"device_name": device_name, "target_port": target_port},
+            json={
+                "device_name": device_name,
+                "target_port": target_port,
+                "consumer_device_name": consumer_device_name,
+            },
             headers=_auth_headers(state),
             timeout=timeout,
         )
@@ -237,7 +335,7 @@ def build_desired_state(
         grant_id = g["grant_id"]
         local_port = state.local_ports.get(grant_id)
         needs_allocation = local_port is None
-        if not needs_allocation and revalidate and not _is_bindable(local_port):
+        if not needs_allocation and revalidate and not is_bindable(local_port):
             taken.discard(local_port)
             needs_allocation = True
         if needs_allocation:
@@ -374,6 +472,7 @@ def run_forever(
     # after a (re)start -- see build_desired_state's docstring for why this
     # must not happen on every cycle.
     first_cycle = True
+    backoff = BACKOFF_INITIAL_SECONDS
     while True:
         try:
             sync_once(
@@ -386,11 +485,17 @@ def run_forever(
                 revalidate_ports=first_cycle,
             )
             first_cycle = False
+            backoff = BACKOFF_INITIAL_SECONDS
+            sleep_seconds = poll_interval_seconds
         except SyncError as exc:
-            logger.warning("sync failed, will retry next cycle: %s", exc)
+            logger.warning("sync failed, retrying in %.0fs: %s", backoff, exc)
+            sleep_seconds = backoff
+            backoff = min(backoff * 2, BACKOFF_MAX_SECONDS)
         except Exception:
             # A long-running daemon must not die from a transient error (a
             # network blip, a server hiccup) -- log and keep polling rather
             # than requiring a process supervisor to notice and restart it.
-            logger.exception("unexpected error during sync, will retry next cycle")
-        _sleep_or_wake(data_dir, poll_interval_seconds)
+            logger.exception("unexpected error during sync, retrying in %.0fs", backoff)
+            sleep_seconds = backoff
+            backoff = min(backoff * 2, BACKOFF_MAX_SECONDS)
+        _sleep_or_wake(data_dir, sleep_seconds)

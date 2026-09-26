@@ -23,7 +23,11 @@ def _xtcp_proxy_name(grant_id: str) -> str:
     return f"{grant_id}-xtcp"
 
 
-def _stcp_proxy_name(grant_id: str) -> str:
+def stcp_proxy_name(grant_id: str) -> str:
+    """Public (unlike the other name helpers here): also used by
+    ``driver.frp.driver.fetch_proxy_traffic`` to look up a grant's relayed
+    traffic on frps's admin API by the same name this renders into the
+    frpc config."""
     return f"{grant_id}-stcp"
 
 
@@ -66,7 +70,7 @@ def build_frpc_config(
         )
         proxies.append(
             {
-                "name": _stcp_proxy_name(exposed.grant_id),
+                "name": stcp_proxy_name(exposed.grant_id),
                 "type": "stcp",
                 "secretKey": exposed.secret,
                 "localIP": "127.0.0.1",
@@ -82,7 +86,7 @@ def build_frpc_config(
             {
                 "name": stcp_name,
                 "type": "stcp",
-                "serverName": _stcp_proxy_name(consumed.grant_id),
+                "serverName": stcp_proxy_name(consumed.grant_id),
                 "secretKey": consumed.secret,
                 "bindPort": -1,
             }

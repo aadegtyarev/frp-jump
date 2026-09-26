@@ -16,10 +16,14 @@ DEB_ARCH="${1:?usage: build.sh <amd64|arm64|armhf> <version> [output-dir]}"
 VERSION="${2:?usage: build.sh <amd64|arm64|armhf> <version> [output-dir]}"
 OUT_DIR="${3:-.}"
 
+NEEDS_C_TOOLCHAIN=false
 case "$DEB_ARCH" in
     amd64) BUILDX_PLATFORM=linux/amd64 ; UV_TARGET=x86_64-unknown-linux-gnu ;;
     arm64) BUILDX_PLATFORM=linux/arm64 ; UV_TARGET=aarch64-unknown-linux-gnu ;;
-    armhf) BUILDX_PLATFORM=linux/arm/v7 ; UV_TARGET=armv7-unknown-linux-gnueabihf ;;
+    armhf)
+        BUILDX_PLATFORM=linux/arm/v7 ; UV_TARGET=armv7-unknown-linux-gnueabihf
+        NEEDS_C_TOOLCHAIN=true  # no prebuilt cffi wheel for this arch -- see Dockerfile
+        ;;
     *)
         echo "unknown architecture ${DEB_ARCH!r} -- use amd64, arm64, or armhf" >&2
         exit 1
@@ -36,6 +40,7 @@ docker buildx build \
     --build-arg "BASE_PLATFORM=$BUILDX_PLATFORM" \
     --build-arg "UV_TARGET=$UV_TARGET" \
     --build-arg "FRP_JUMP_VERSION=$VERSION" \
+    --build-arg "NEEDS_C_TOOLCHAIN=$NEEDS_C_TOOLCHAIN" \
     --target export \
     -o "type=local,dest=$WORK_DIR/export" \
     -f "$SCRIPT_DIR/Dockerfile" \

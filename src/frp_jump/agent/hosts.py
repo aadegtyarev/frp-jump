@@ -7,9 +7,20 @@ fully regenerated on every apply so it always matches the current grants.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 _MANAGED_HEADER = "# managed by frp-jump -- do not edit, changes are overwritten on the next sync\n"
+
+# Same character class as server/registry.py's device/service name rule --
+# whatever ends up as an ssh_config `Host` alias must be just as strict,
+# whether it came from the server (already validated there) or from a
+# purely local, never-server-validated `connect --as <name>` profile.
+_SAFE_ALIAS_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$")
+
+
+def is_safe_alias(name: str) -> bool:
+    return bool(_SAFE_ALIAS_RE.match(name))
 
 
 def managed_config_path(data_dir: Path) -> Path:
@@ -17,9 +28,16 @@ def managed_config_path(data_dir: Path) -> Path:
 
 
 def render_ssh_config(entries: list[tuple[str, int]]) -> str:
-    """``entries``: (service_name, local_port) for each consumed SSH grant."""
+    """``entries``: (service_name, local_port) for each consumed SSH grant.
+
+    Defense in depth: rejects an alias that isn't ``is_safe_alias`` rather
+    than trust every caller upstream to have checked -- a stray newline or
+    ssh_config keyword here is a path to config injection on this device.
+    """
     lines = [_MANAGED_HEADER]
     for name, port in entries:
+        if not is_safe_alias(name):
+            raise ValueError(f"unsafe ssh_config Host alias: {name!r}")
         lines.append(f"\nHost {name}\n    HostName 127.0.0.1\n    Port {port}\n")
     return "".join(lines)
 

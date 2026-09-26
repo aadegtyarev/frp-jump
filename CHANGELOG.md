@@ -6,6 +6,148 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-26
+
+**Breaking.** The WebUI, email/password accounts, and device/grant
+"revoke" are all gone. If you're upgrading a running server: back up its
+database, then let it recreate the schema from scratch (there is no
+migration path from the old `User.email`/`Session`/`LoginToken` tables) --
+re-register users with `users add-key` and re-enroll every device. Config
+keys `webui_host`/`webui_port` are renamed to `api_host`/`api_port`;
+`login_token_ttl_minutes`/`session_ttl_days` are gone.
+
+### Added
+
+- **SSH-key-based identity and enrollment.** A `User` is now identified by
+  an SSH public key, not an email/password account:
+  `frp-jump-server users add-key <pubkey-file> [--label X]` registers
+  someone once, and every device they enroll after that can prove
+  possession of that key directly (`frp-jump-client enroll <url>
+  <private-key-path> --name X`, a challenge/response round trip signed
+  locally with `ssh-keygen -Y sign`/verified server-side with
+  `ssh-keygen -Y verify` -- see `common/ssh_signing.py`) -- no token
+  needed at all. The classic one-time `EnrollToken` flow still exists
+  alongside it, for a device without the key on it. `frp-jump-server
+  users set-key` / self-service `frp-jump-client set-key` rotate a lost
+  or replaced key.
+- **`frp-jump-server` admin CLI**, replacing the WebUI entirely: `users
+  add-key/set-key/list/show/delete`, `devices list/delete/disable/enable`,
+  `enroll-tokens create/list/revoke`. Every mutating `devices` subcommand
+  requires `--user` (see "per-owner device names" below).
+- **`enable`/`disable`** (`frp-jump-server devices disable/enable --user
+  X`, self-service `frp-jump-client devices disable/enable`) replaces the
+  old "revoke": tears down and blocks new connections, reversibly, without
+  losing the device's enrollment -- it keeps polling and picks back up
+  the moment it's re-enabled. `delete` is now the only irreversible
+  device/grant operation.
+- **`frp-jump-client install-service [--user]`**: installs and enables
+  the systemd unit for `client run` (system-wide, needs root, or under
+  your own account with `--user`). `enroll` runs this automatically when
+  invoked as root.
+- **`connect`/`disconnect` UX**: `connect` drops `--protocol` in favor of
+  auto-classifying SSH by well-known port (22, 2222) or an explicit
+  `--ssh` flag -- there's no other functional protocol distinction to
+  make. New `--local-port` pins the local bound port instead of picking
+  one automatically. `disconnect --from OTHER-DEVICE` tears down a
+  connection made from a *different* one of your own devices (with a
+  confirmation prompt, skippable with `-y`) -- for when you notice a
+  forgotten connection on another device in `devices list`.
+- **Relayed-traffic visibility**: `frp-jump-server users show`/`devices
+  list` show a compact "relayed today: X in / Y out" figure per
+  connection, read from frps's own admin API. Deliberately relay-only --
+  a genuinely peer-to-peer (xtcp) connection's traffic is invisible to
+  frp itself (verified against frp's own source, see
+  `docs/architecture.md`), so this can never show a p2p connection's
+  actual volume, only what really went through the relay.
+- Agent hardening: `client run`'s sync loop retries a failed cycle
+  (server unreachable, network down) with exponential backoff (5s up to
+  90s) instead of a fixed interval, resetting to normal cadence once a
+  cycle succeeds -- and never exits the process, so systemd never needs
+  to restart it. The same tolerance applies to the one-time frp binary
+  download at startup.
+
+### Changed
+
+- Device names are unique per-owner now, not globally -- two different
+  people can each have a device called "laptop". Every admin CLI command
+  that names a device (`devices delete/disable/enable`) requires `--user`
+  for exactly this reason.
+- `client devices` replaces the old bare `add-device`/`list`/
+  `delete-device` commands: `devices add-token` (renamed from
+  `add-device`), `devices list`, `devices delete`, plus new `devices
+  disable`/`devices enable`.
+- `client enroll`'s second argument is now either a one-time token or a
+  private-key path (auto-detected) -- `TOKEN_OR_KEYFILE`, not just
+  `TOKEN`.
+
+### Removed
+
+- The WebUI, entirely (`server/web.py`, `server/auth.py`,
+  `server/templates/`) -- administration is 100% `frp-jump-server` CLI
+  run over SSH to the box now. `server init` no longer takes
+  `--admin-email`; `server login-link` is gone (nothing to log in to).
+  `jinja2`/`python-multipart` dropped from the `[server]` extra.
+  `packaging/scripts/frp-jump-login-link` deleted (wrapped a command that
+  no longer exists).
+- `revoke_device`/`revoke_grant` and the `Device.revoked_at`/
+  `Grant.revoked_at` columns -- see `enable`/`disable` above.
+
+### Security
+
+Found and fixed by an independent Opus review of this release before it
+shipped:
+
+- **Critical: a multi-line "key" blob could enroll as someone else's
+  account.** `ssh-keygen -l` only ever fingerprints the *first* key in a
+  file, but `-Y verify`'s allowed-signers file matches any line in it --
+  so a crafted two-line input (a victim's public key, plus an attacker's
+  on a second line) fingerprinted as the victim while actually
+  authenticating with the attacker's key, letting an attacker enroll a
+  device into the victim's account after registering that blob via
+  `set-key`. `common/ssh_signing.py` now canonicalizes (and rejects any
+  embedded newline in) every key before fingerprinting *or* verifying it;
+  every registry entry point that stores a key goes through the same
+  check.
+- **Critical: `/users/set-key` required no proof of possession of the new
+  key.** A bearer token alone was enough to repoint an account at any
+  public key an attacker could name (e.g. harvested from
+  `github.com/<user>.keys`) -- including as a way to persist access after
+  the device that leaked the token was deleted or disabled. Key rotation
+  is now a signed challenge/response round trip, same shape as key-based
+  enrollment (`/users/set-key/challenge` then `/users/set-key`; `client
+  set-key` now takes a private-key path, not a bare public key file).
+- **High: one-time enroll tokens and key challenges were redeemable
+  twice under concurrent requests.** Redemption read `used_at IS NULL`
+  and wrote it back separately, so two racing redemptions could both
+  pass the check and each create a device before either committed.
+  Consumption is now one atomic conditional `UPDATE ... WHERE used_at IS
+  NULL`, sharing the same commit as the device it creates.
+- **High: `install-service` run via `sudo` pointed the daemon at
+  `/root`.** `sudo` sets `$HOME=/root` by default, so a system-wide
+  install after an unprivileged `enroll` looked for state in the wrong
+  place and restart-looped forever, finding nothing. `install`/`enroll`
+  now resolve the real invoking user via `$SUDO_USER` and set `User=` on
+  the generated unit accordingly (a genuine root login is unaffected).
+- **Medium**: `ssh-keygen` subprocess calls (reachable from the
+  unauthenticated `/enroll/challenge` route) now have a timeout, so a
+  stuck invocation can't pin a request-handling thread indefinitely.
+  `/enroll/challenge` now always issues a syntactically valid challenge
+  regardless of whether the key is registered -- rejection only happens
+  at redemption, indistinguishable from a bad signature -- since the
+  200-vs-404 split was itself an enumeration oracle no matter how the
+  error text read. Outstanding challenges per fingerprint are now capped
+  and expired ones opportunistically purged, since that route has no
+  auth to otherwise bound how many it accumulates.
+- A disabled device's still-valid bearer token could call
+  `/devices/{self}/enable` and re-enable itself, or `/users/set-key`,
+  `/devices/{other}/delete`, `/devices/enroll-tokens`, and `connect`/
+  `disconnect` -- defeating the entire point of `disable` for a
+  suspected-compromised device. Every *mutating* self-service route now
+  depends on a new `get_enabled_device` (not just `get_current_device`),
+  which rejects a disabled device's token with 403; only heartbeat and
+  desired-state (both read-only, and desired-state already goes empty
+  while disabled) stay reachable with it.
+
 ## [0.2.1] - 2026-09-26
 
 ### Fixed

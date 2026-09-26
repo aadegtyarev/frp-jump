@@ -14,11 +14,15 @@ from typing import Protocol, runtime_checkable
 
 
 class ServiceProtocol(StrEnum):
-    """What kind of client is expected to talk to an exposed service."""
+    """The only functional difference between these is whether the
+    consuming agent writes an ``ssh_config`` ``Host`` entry for it (see
+    ``agent/poller.py``'s ``sync_ssh_config``) -- frp proxies the
+    underlying bytes identically either way, regardless of what's
+    actually running on the port (HTTP, MQTT, or anything else). A
+    finer-grained label would be purely cosmetic, so there isn't one."""
 
     SSH = "ssh"
     TCP = "tcp"
-    HTTP = "http"
 
 
 class ProxyState(StrEnum):

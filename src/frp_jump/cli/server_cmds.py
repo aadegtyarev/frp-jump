@@ -18,7 +18,7 @@ from frp_jump.common.settings import Settings
 from frp_jump.driver.base import RelayState
 from frp_jump.driver.frp.binaries import ensure_installed
 from frp_jump.driver.frp.driver import FrpsRelayDriver, fetch_proxy_traffic
-from frp_jump.server import bootstrap, registry
+from frp_jump.server import bootstrap, registry, service_install
 from frp_jump.server.app import create_app
 from frp_jump.server.db import Session, make_engine, make_session
 
@@ -159,6 +159,51 @@ def run() -> None:
         uvicorn.run(web_app, host=settings.api_host, port=settings.api_port, **ssl_kwargs)
     finally:
         relay.stop()
+
+
+@app.command("install-service")
+def install_service(
+    system_user: str = typer.Option(
+        "frp-jump",
+        "--system-user",
+        help="Dedicated, unprivileged system account to run as (created if "
+        "missing, along with its own /var/lib/<name> data directory).",
+    ),
+    relay_public_addr: str | None = typer.Option(
+        None,
+        "--relay-public-addr",
+        help="Address other devices will use to reach this server, e.g. "
+        "tunnel.example.com. Required the first time; a rerun (e.g. after "
+        "upgrading the binary) reuses whatever is already configured.",
+    ),
+) -> None:
+    """One-shot setup: create a dedicated system user, bootstrap the CA/
+    database, write config to /etc/frp-jump/<system-user>.env, and
+    install + start a hardened systemd unit. Requires root. Safe to
+    rerun any time -- it refreshes the unit to point at wherever
+    `frp-jump-server` currently is, without touching your existing config.
+
+    This replaces doing all of that by hand -- see docs/architecture.md
+    for exactly what it sets up, if you'd rather do it yourself.
+
+    Examples:
+
+        sudo frp-jump-server install-service --relay-public-addr tunnel.example.com
+
+        sudo frp-jump-server install-service
+    """
+    try:
+        unit_path = service_install.install(
+            system_user=system_user, relay_public_addr=relay_public_addr
+        )
+    except service_install.ServiceInstallError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"[green]Installed and started[/green] ({unit_path}).")
+    console.print(
+        "Next: register yourself as a user -- "
+        "[bold]frp-jump-server users add-key ~/.ssh/id_ed25519.pub[/bold]"
+    )
 
 
 # --- users ------------------------------------------------------------

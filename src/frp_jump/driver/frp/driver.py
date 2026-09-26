@@ -34,7 +34,7 @@ from pathlib import Path
 import httpx
 import tomli_w
 
-from frp_jump.common.pki import write_private_key
+from frp_jump.common.crypto import write_private_key
 from frp_jump.driver.base import (
     DesiredState,
     DriverStatus,
@@ -120,7 +120,11 @@ class FrpDriver:
             return
 
         self._config_path.parent.mkdir(parents=True, exist_ok=True)
-        self._config_path.write_bytes(tomli_w.dumps(config).encode("utf-8"))
+        # Not literally a private key, but just as secret -- every proxy's
+        # secretKey lives in here, and write_private_key's restrictive-
+        # from-creation write closes the same window a plain write_bytes
+        # (subject to umask, world-readable by default) would leave open.
+        write_private_key(self._config_path, tomli_w.dumps(config).encode("utf-8"))
         self._supervisor.start([str(self._binary), "-c", str(self._config_path)])
         self._fingerprint = fingerprint
 
@@ -160,7 +164,7 @@ class FrpsRelayDriver:
             return
 
         self._config_path.parent.mkdir(parents=True, exist_ok=True)
-        self._config_path.write_bytes(tomli_w.dumps(config).encode("utf-8"))
+        write_private_key(self._config_path, tomli_w.dumps(config).encode("utf-8"))
         self._supervisor.start([str(self._binary), "-c", str(self._config_path)])
         self._fingerprint = fingerprint
 

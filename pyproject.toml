@@ -1,6 +1,6 @@
 [project]
 name = "frp-jump"
-version = "0.3.1"
+version = "0.3.2"
 description = "P2P-with-relay-fallback ssh/tcp tunnels between Linux boxes, built on frp"
 readme = "README.md"
 license = "MIT"
@@ -12,7 +12,6 @@ requires-python = ">=3.12"
 dependencies = [
     "typer>=0.15",
     "rich>=13.9",
-    "cryptography>=43.0",
     "tomli-w>=1.1",
     "httpx>=0.27",
     "pydantic-settings>=2.15.0",
@@ -21,11 +20,18 @@ dependencies = [
 [project.optional-dependencies]
 # Only the server/control-plane needs these -- a device install
 # (`pip install frp-jump`, no extra) stays lean. See `frp-jump-client`
-# below, whose import chain never touches this.
+# below, whose import chain never touches this. cryptography specifically
+# has no prebuilt wheel on some platforms (e.g. Termux/Android) and needs
+# a Rust toolchain to build from source -- worth keeping out of the
+# client's dependency chain for that reason alone, not just size (see
+# common/crypto.py's own `write_private_key`, which the client actually
+# uses, deliberately kept dependency-free instead of living next to
+# common/pki.py's real cryptography usage).
 server = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "sqlmodel>=0.0.22",
+    "cryptography>=43.0",
 ]
 
 [project.scripts]

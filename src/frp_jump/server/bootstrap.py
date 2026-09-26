@@ -12,7 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from frp_jump.common.pki import CertificateAuthority, KeyCertPair, write_private_key
+from frp_jump.common.crypto import write_private_key
+from frp_jump.common.pki import CertificateAuthority, KeyCertPair
 from frp_jump.common.settings import Settings
 from frp_jump.server.db import make_engine
 

@@ -58,6 +58,16 @@ if anything below is unclear (`frp-jump-client <command> --help`).
 On the **server** (a box with a public IP/domain):
 
 ```sh
+sudo frp-jump-server install-service --relay-public-addr tunnel.example.com
+```
+
+That one command creates a dedicated, unprivileged `frp-jump` system
+user, bootstraps the CA/database under its own `/var/lib/frp-jump`, and
+installs + starts a hardened systemd unit -- see "systemd" below for
+what it actually sets up. Prefer to do it by hand, or already have your
+own service-account convention:
+
+```sh
 export FRP_JUMP_RELAY_PUBLIC_ADDR=tunnel.example.com   # or a bare IP
 frp-jump-server init
 frp-jump-server run          # foreground; wrap with systemd for real use
@@ -88,9 +98,9 @@ Run as root, `enroll` also installs and starts the systemd service right
 away; otherwise it tells you to run `install-service` next:
 
 ```sh
-frp-jump-client install-service          # system-wide, needs root
-# or
-frp-jump-client install-service --user   # your own account, no root needed
+frp-jump-client install-service                                  # system-wide, needs root
+frp-jump-client install-service --user                            # your own account, no root needed
+frp-jump-client install-service --system-user frp-jump-client     # isolated account (created for you)
 ```
 
 From there, everything is self-service — no more admin action needed for
@@ -151,19 +161,27 @@ init`/`run` refuse to start without it.
 
 ## systemd
 
-On the client, `frp-jump-client install-service [--user]` generates and
-enables the unit for you (see "Quick start" above) — reach for
-[`packaging/systemd/`](packaging/systemd/) directly only for a manual or
-packaged (`.deb`) install. Its comments explain a real gotcha either way:
-a device that *consumes* an SSH grant needs the agent running as the
-actual human (so it can maintain their real `~/.ssh/config`) — a `--user`
-unit, not a system one, unless you point `FRP_JUMP_SSH_CONFIG_PATH` at
-that user's config explicitly. A device that only *exposes* services
-(e.g. a Wiren Board controller) is fine as a system service.
+On the client, `frp-jump-client install-service [--user | --system-user
+NAME]` generates and enables the unit for you (see "Quick start" above)
+— reach for [`packaging/systemd/`](packaging/systemd/) directly only for
+a manual or packaged (`.deb`) install. Its comments explain a real
+gotcha: a device that *consumes* an SSH grant needs the agent running as
+the actual human (so it can maintain their real `~/.ssh/config`) — a
+`--user` unit, not a system one, unless you point
+`FRP_JUMP_SSH_CONFIG_PATH` at that user's config explicitly. A device
+that only *exposes* services (e.g. a Wiren Board controller), or
+consumes without needing `ssh <name>` to just work, is fine as a system
+service or under `--system-user` — an isolated account created for you,
+least-privilege, with its own `/var/lib/<name>`.
 
-The server has no such install helper yet — see
+On the server, `frp-jump-server install-service [--system-user NAME]
+[--relay-public-addr ADDR]` is the equivalent one-shot setup (see "Quick
+start" above): creates the system account, bootstraps the CA/database,
+writes `/etc/frp-jump/<name>.env`, and installs a hardened unit
+(`ProtectSystem=strict`, `NoNewPrivileges=yes`, one writable data
+directory) — matching
 [`packaging/systemd/frp-jump-server.service`](packaging/systemd/frp-jump-server.service)
-directly.
+if you'd rather set it up by hand.
 
 ## Development
 

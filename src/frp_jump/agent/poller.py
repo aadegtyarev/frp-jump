@@ -416,17 +416,23 @@ def sync_once(
 ) -> DesiredState:
     """One full cycle: heartbeat, pull desired state, apply it, refresh ssh config.
 
-    ``state.profiles`` is refreshed from disk first: it's the one field of
-    this long-lived process's in-memory ``state`` that a separate, one-shot
-    CLI invocation (`client connect`/`disconnect`/`delete-device`) can also
-    write, while this loop only ever reads it. Skipping this reload would
-    have the daemon's next incidental write (e.g. a local port allocation
-    changing `state.profiles` right back to whatever it was when `run`
-    started, silently reverting a `connect` made after that.
+    ``state.profiles``/``state.local_ports`` are refreshed from disk
+    first: both are fields of this long-lived process's in-memory
+    ``state`` that a separate, one-shot CLI invocation (`client connect`/
+    `disconnect`/`delete-device`) can also write, while this loop mostly
+    only reads them (aside from allocating a fresh port for a brand-new
+    grant). Skipping this reload for ``profiles`` would have the daemon's
+    next incidental write silently revert a `connect` made after `run`
+    started; skipping it for ``local_ports`` had a sharper version of the
+    same bug -- `connect --local-port N` writes the pin straight to disk,
+    but the running daemon's own in-memory copy has no entry for that
+    grant yet, so it allocated a fresh port and immediately saved over
+    the pin, before ever reading this function's docstring's promise.
     """
     on_disk = load(data_dir)
     if on_disk is not None:
         state.profiles = on_disk.profiles
+        state.local_ports = on_disk.local_ports
 
     send_heartbeat(state, agent_version=agent_version)
     remote = fetch_desired_state(state)

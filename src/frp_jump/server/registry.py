@@ -158,6 +158,9 @@ def create_key_rotation_challenge(
         public_key = ssh_signing.canonicalize(public_key)
     except ssh_signing.SshSigningError as exc:
         raise ValidationError(str(exc)) from exc
+    # Opportunistic cleanup, same rationale as create_enroll_challenge's --
+    # nothing else ever prunes this table.
+    session.execute(sa_delete(KeyRotationChallenge).where(KeyRotationChallenge.expires_at < _now()))
     record = KeyRotationChallenge(
         device_id=device_id,
         public_key=public_key,
@@ -627,6 +630,14 @@ def delete_device(session: Session, device_id: str) -> None:
     # between stages it can (and did, see the test that caught this) try to
     # delete a row before what still references it, and SQLite's now-
     # enforced FOREIGN KEY constraint (server/db.py) rejects that.
+    #
+    # KeyRotationChallenge.device_id is one such FK -- any device that
+    # ever called `set-key` (successfully or not; redemption only marks
+    # used_at, it never deletes) would otherwise leave a dangling
+    # reference and turn this into an IntegrityError instead of a delete.
+    session.execute(
+        sa_delete(KeyRotationChallenge).where(KeyRotationChallenge.device_id == device_id)
+    )
     owned_service_ids = [
         s.id for s in session.exec(select(Service).where(Service.device_id == device_id))
     ]

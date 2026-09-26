@@ -6,6 +6,62 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-26
+
+Found by a second, broader independent review (security + module/class
+design) run right after 0.3.1 shipped, plus real-world testing on a
+second machine.
+
+### Added
+
+- **`--system-user`**: both `frp-jump-client enroll`/`install-service`
+  and the new `frp-jump-server install-service` can now run isolated
+  under a dedicated, unprivileged system account (created automatically,
+  no login shell, its own `/var/lib/<name>`) instead of root or a real
+  person's own account -- least-privilege, matching how this project's
+  own server deployments already run.
+- **`frp-jump-server install-service [--system-user NAME]
+  [--relay-public-addr ADDR]`**: one-shot automated setup -- creates the
+  system user, bootstraps the CA/database, writes
+  `/etc/frp-jump/<name>.env`, and installs + starts a hardened systemd
+  unit (`ProtectSystem=strict`, `NoNewPrivileges=yes`, a single writable
+  data directory). Previously this had to be done by hand.
+
+### Fixed
+
+- **High: deleting a device (or its owner) crashed with a foreign-key
+  `IntegrityError`** once that device had ever called `set-key` --
+  `KeyRotationChallenge.device_id` is an enforced FK that `delete_device`
+  never cleared. The device and its owner became permanently
+  undeletable through any admin or self-service path.
+- **High: `connect --local-port N` was silently ignored, and the wrong
+  port was reported, whenever `run` was already looping.** `sync_once`
+  only reloaded `profiles` from disk (the 0.2.1 fix), not `local_ports`
+  -- a pin written by a separate `connect` invocation was invisible to
+  the running daemon's in-memory copy, which allocated and saved over
+  it on its very next cycle. Both fields are now reloaded together.
+- **`sudo <full-path-to-frp-jump-client> install-service` could still
+  fail** two different ways after the 0.3.1 fix: `resolve_exec_path`
+  re-searched `PATH` (sudo's restricted `secure_path`) instead of
+  trusting the exact path it was just invoked with, and
+  `install-service`'s own pre-flight enrollment check used a plain
+  `Settings()` instead of the same `$SUDO_USER`-aware resolution
+  `install` itself already used -- both hit on a real second-machine
+  install this session. `install-service --help` also now says outright
+  that `--user` mode stops on logout unless `loginctl enable-linger` is
+  set up.
+- **The client no longer depends on `cryptography` at all.** It was
+  pulled in only for `write_private_key`, a plain `os.open`/`os.write`
+  helper that happened to live in the same module as the server's real
+  x509/CA code (`common/pki.py`) -- moved to dependency-free
+  `common/crypto.py`, and `cryptography` moved to the `[server]` extra.
+  `cryptography` has no prebuilt wheel on some platforms (e.g.
+  Termux/Android) and needs a Rust toolchain to build from source; a
+  plain `pip install frp-jump` no longer needs either.
+- `frpc.toml`/`frps.toml` (every grant's `secretKey`) were written with
+  the default umask (typically world-readable); now written the same
+  restrictive-from-creation way as `tls.key` already was.
+
 ## [0.3.1] - 2026-09-26
 
 Two real-world rough edges hit within hours of 0.3.0 shipping, both around

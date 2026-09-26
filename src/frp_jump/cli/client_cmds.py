@@ -62,7 +62,7 @@ def _require_state(settings: Settings):
     return state
 
 
-def _settings_for_service_ops(*, user_service: bool) -> Settings:
+def _settings_for_service_ops(*, user_service: bool, system_user: str | None = None) -> Settings:
     """`Settings()`, with `data_dir` corrected for `sudo` -- shared by
     `enroll` (before writing state) and `install-service` (before
     checking for it), so both agree on where state lives when run via
@@ -71,9 +71,19 @@ def _settings_for_service_ops(*, user_service: bool) -> Settings:
     `$HOME` to root's home, so a plain `Settings()` here would look in
     `/root` even though `enroll` (run unprivileged, the whole point of
     this two-step flow) wrote state under the invoking person's own home
-    -- see `service_install.resolve_target_home`'s docstring."""
+    -- see `service_install.resolve_target_home`'s docstring.
+
+    ``system_user`` takes priority over the sudo-aware resolution above --
+    it points at a dedicated, isolated account's own state directory
+    instead (see `service_install.ensure_system_user`), creating that
+    account if it doesn't exist yet."""
     settings = Settings()
-    if os.geteuid() == 0 and not user_service and "FRP_JUMP_DATA_DIR" not in os.environ:
+    if system_user:
+        if os.geteuid() != 0:
+            console.print("[red]--system-user requires root[/red] -- rerun with sudo")
+            raise typer.Exit(1)
+        settings.data_dir = service_install.ensure_system_user(system_user)
+    elif os.geteuid() == 0 and not user_service and "FRP_JUMP_DATA_DIR" not in os.environ:
         home, _ = service_install.resolve_target_home()
         settings.data_dir = home / ".local" / "share" / "frp-jump"
     return settings
@@ -187,6 +197,14 @@ def enroll_cmd(
         help="If run as root, install the systemd service under your own "
         "account afterwards instead of system-wide. Ignored when not root.",
     ),
+    system_user: str | None = typer.Option(
+        None,
+        "--system-user",
+        help="Create (if missing) and enroll as a dedicated, unprivileged "
+        "system account with this name, instead of your own account or "
+        "root -- e.g. --system-user frp-jump-client. Requires root; "
+        "mutually exclusive with --user.",
+    ),
 ) -> None:
     """Trade a one-time enroll token, or your own registered SSH key, for
     this device's identity.
@@ -206,9 +224,13 @@ def enroll_cmd(
 
         frp-jump-client enroll https://tunnel.example.com ~/.ssh/id_ed25519 --name laptop
 
-        frp-jump-client enroll https://tunnel.example.com abc123... --name laptop
+        sudo frp-jump-client enroll https://tunnel.example.com abc123... \\
+            --name laptop --system-user frp-jump-client
     """
-    settings = _settings_for_service_ops(user_service=user_service)
+    if user_service and system_user:
+        console.print("[red]--user and --system-user are mutually exclusive[/red]")
+        raise typer.Exit(1)
+    settings = _settings_for_service_ops(user_service=user_service, system_user=system_user)
     keyfile_path = Path(token_or_keyfile).expanduser()
 
     try:
@@ -235,13 +257,16 @@ def enroll_cmd(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
+    if system_user:
+        service_install.chown_tree(settings.data_dir, system_user)
+
     console.print(
         f"[green]Enrolled[/green] as [bold]{state.device_name}[/bold] ({state.device_id})"
     )
 
     if os.geteuid() == 0:
         try:
-            unit_path = service_install.install(user=user_service)
+            unit_path = service_install.install(user=user_service, system_user=system_user)
         except service_install.ServiceInstallError as exc:
             console.print(f"[yellow]could not install the service:[/yellow] {exc}")
             console.print(
@@ -275,6 +300,15 @@ def install_service_cmd(
         "--user",
         help="Install under your own account instead of system-wide (no root needed).",
     ),
+    system_user: str | None = typer.Option(
+        None,
+        "--system-user",
+        help="Run as a dedicated, unprivileged system account with this name "
+        "(created if missing) instead of your own account or root -- e.g. "
+        "--system-user frp-jump-client. Requires root; mutually exclusive "
+        "with --user. If you haven't enrolled yet, use `enroll --system-user "
+        "<name>` instead, so enrollment itself also lands in that account.",
+    ),
 ) -> None:
     """Install and enable the systemd service that keeps `run` going across
     reboots. Safe to rerun any time, e.g. after upgrading the binary -- it
@@ -289,7 +323,9 @@ def install_service_cmd(
     it stops the moment you log out, unless you also run `sudo loginctl
     enable-linger $(whoami)` once to let it keep running regardless.
     Without `--user` (the default, system-wide), this doesn't apply -- it
-    runs regardless of who's logged in.
+    runs regardless of who's logged in. `--system-user` doesn't apply
+    either way -- it's an isolated account of its own, not tied to any
+    login session.
 
     Examples:
 
@@ -298,11 +334,16 @@ def install_service_cmd(
         sudo $(which frp-jump-client) install-service
 
         frp-jump-client install-service --user
+
+        sudo frp-jump-client install-service --system-user frp-jump-client
     """
-    settings = _settings_for_service_ops(user_service=user)
+    if user and system_user:
+        console.print("[red]--user and --system-user are mutually exclusive[/red]")
+        raise typer.Exit(1)
+    settings = _settings_for_service_ops(user_service=user, system_user=system_user)
     _require_state(settings)
     try:
-        unit_path = service_install.install(user=user)
+        unit_path = service_install.install(user=user, system_user=system_user)
     except service_install.ServiceInstallError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc

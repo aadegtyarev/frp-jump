@@ -1,0 +1,104 @@
+import pytest
+
+from frp_jump.server import bootstrap, service_install
+
+
+def test_install_requires_root(monkeypatch):
+    monkeypatch.setattr(service_install.os, "geteuid", lambda: 1000)
+
+    with pytest.raises(service_install.ServiceInstallError, match="requires root"):
+        service_install.install(relay_public_addr="tunnel.example.com")
+
+
+def test_install_requires_relay_public_addr_on_first_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(service_install.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(service_install, "ensure_system_user", lambda name: tmp_path / name)
+    monkeypatch.setattr(service_install, "_ENV_DIR", tmp_path / "etc-frp-jump")
+
+    with pytest.raises(service_install.ServiceInstallError, match="relay-public-addr"):
+        service_install.install()
+
+
+def test_install_writes_env_file_and_bootstraps(tmp_path, monkeypatch):
+    data_dir = tmp_path / "var-lib" / "frp-jump"
+    env_dir = tmp_path / "etc-frp-jump"
+    unit_dir = tmp_path / "etc-systemd"
+
+    monkeypatch.setattr(service_install.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(service_install, "ensure_system_user", lambda name: data_dir)
+    monkeypatch.setattr(service_install, "_ENV_DIR", env_dir)
+    monkeypatch.setattr(service_install, "_SYSTEM_UNIT_DIR", unit_dir)
+    monkeypatch.setattr(service_install, "chown_tree", lambda path, name: None)
+    monkeypatch.setattr(service_install.shutil, "chown", lambda *a, **k: None)
+    monkeypatch.setattr(
+        service_install, "resolve_exec_path", lambda name: "/usr/bin/frp-jump-server"
+    )
+    monkeypatch.setattr(service_install.subprocess, "run", lambda *a, **k: None)
+
+    bootstrapped = {}
+
+    def fake_initialize(settings):
+        bootstrapped["data_dir"] = settings.data_dir
+        bootstrapped["relay_public_addr"] = settings.relay_public_addr
+        return bootstrap.BootstrapResult(
+            data_dir=settings.data_dir, db_path=settings.data_dir / "db.sqlite3", ca_cert_pem=b""
+        )
+
+    monkeypatch.setattr(bootstrap, "initialize", fake_initialize)
+
+    unit_path = service_install.install(
+        system_user="frp-jump", relay_public_addr="tunnel.example.com"
+    )
+
+    env_path = env_dir / "frp-jump.env"
+    assert env_path.is_file()
+    assert "FRP_JUMP_RELAY_PUBLIC_ADDR=tunnel.example.com" in env_path.read_text()
+    assert (env_path.stat().st_mode & 0o777) == 0o640
+    assert bootstrapped["relay_public_addr"] == "tunnel.example.com"
+    assert bootstrapped["data_dir"] == data_dir
+
+    assert unit_path == unit_dir / "frp-jump-server.service"
+    content = unit_path.read_text()
+    assert "User=frp-jump" in content
+    assert f"EnvironmentFile={env_path}" in content
+    assert "ExecStart=/usr/bin/frp-jump-server run" in content
+
+
+def test_install_reruns_without_relay_public_addr_using_existing_env(tmp_path, monkeypatch):
+    data_dir = tmp_path / "var-lib" / "frp-jump"
+    env_dir = tmp_path / "etc-frp-jump"
+    env_dir.mkdir(parents=True)
+    env_path = env_dir / "frp-jump.env"
+    env_path.write_text(
+        f"FRP_JUMP_DATA_DIR={data_dir}\nFRP_JUMP_RELAY_PUBLIC_ADDR=already.example.com\n"
+    )
+    unit_dir = tmp_path / "etc-systemd"
+
+    monkeypatch.setattr(service_install.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(service_install, "ensure_system_user", lambda name: data_dir)
+    monkeypatch.setattr(service_install, "_ENV_DIR", env_dir)
+    monkeypatch.setattr(service_install, "_SYSTEM_UNIT_DIR", unit_dir)
+    monkeypatch.setattr(service_install, "chown_tree", lambda path, name: None)
+    monkeypatch.setattr(
+        service_install, "resolve_exec_path", lambda name: "/usr/bin/frp-jump-server"
+    )
+    monkeypatch.setattr(service_install.subprocess, "run", lambda *a, **k: None)
+
+    bootstrapped = {}
+    monkeypatch.setattr(
+        bootstrap,
+        "initialize",
+        lambda settings: bootstrapped.update(relay_public_addr=settings.relay_public_addr),
+    )
+
+    service_install.install(system_user="frp-jump")
+
+    assert bootstrapped["relay_public_addr"] == "already.example.com"
+
+
+def test_read_env_value_finds_the_matching_key(tmp_path):
+    env_path = tmp_path / "x.env"
+    env_path.write_text("FRP_JUMP_DATA_DIR=/var/lib/x\nFRP_JUMP_RELAY_PUBLIC_ADDR=host.example\n")
+
+    assert service_install._read_env_value(env_path, "FRP_JUMP_RELAY_PUBLIC_ADDR") == "host.example"
+    assert service_install._read_env_value(env_path, "NOT_PRESENT") is None

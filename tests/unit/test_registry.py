@@ -480,6 +480,28 @@ def test_delete_device_cascades_to_grants_it_consumed(db_session) -> None:
     assert db_session.get(type(grant), grant.id) is None
 
 
+def test_delete_device_after_it_called_set_key_does_not_crash(db_session, tmp_path) -> None:
+    """Regression test: KeyRotationChallenge.device_id is an enforced FK
+    -- a device that ever redeemed (or even just started) a set-key
+    challenge used to leave a dangling row and turn a later delete into
+    an IntegrityError instead of a clean delete."""
+    admin = _make_user(db_session)
+    laptop = _enroll(db_session, admin, "laptop")
+    new_key_path, new_public_key = _make_keypair(tmp_path)
+
+    challenge = registry.create_key_rotation_challenge(
+        db_session, device_id=laptop.device.id, public_key=new_public_key, ttl=_TTL
+    )
+    signature_b64 = _sign_challenge(new_key_path, challenge.challenge)
+    registry.redeem_key_rotation_challenge(
+        db_session, challenge.id, signature_b64, device_id=laptop.device.id
+    )
+
+    registry.delete_device(db_session, laptop.device.id)
+
+    assert registry.get_device(db_session, laptop.device.id) is None
+
+
 def test_delete_grant_removes_it_from_list_grants_view(db_session) -> None:
     admin = _make_user(db_session)
     exposer = _enroll(db_session, admin, "wb01")

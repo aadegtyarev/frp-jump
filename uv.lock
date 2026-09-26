@@ -213,10 +213,9 @@ wheels = [
 
 [[package]]
 name = "frp-jump"
-version = "0.3.1"
+version = "0.3.2"
 source = { editable = "." }
 dependencies = [
-    { name = "cryptography" },
     { name = "httpx" },
     { name = "pydantic-settings" },
     { name = "rich" },
@@ -226,6 +225,7 @@ dependencies = [
 
 [package.optional-dependencies]
 server = [
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "sqlmodel" },
     { name = "uvicorn", extra = ["standard"] },
@@ -240,7 +240,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cryptography", specifier = ">=43.0" },
+    { name = "cryptography", marker = "extra == 'server'", specifier = ">=43.0" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic-settings", specifier = ">=2.15.0" },

@@ -10,9 +10,7 @@ from __future__ import annotations
 
 import datetime
 import ipaddress
-import os
 from dataclasses import dataclass
-from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -21,18 +19,6 @@ from cryptography.hazmat.primitives.asymmetric.types import (
     CertificateIssuerPrivateKeyTypes,
 )
 from cryptography.x509.oid import NameOID
-
-
-def write_private_key(path: Path, data: bytes) -> None:
-    """Write a private key with restrictive permissions from creation, not
-    chmod after -- chmod-after-write leaves a window where the key is
-    readable by anyone on the box (default umask)."""
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(fd, data)
-    finally:
-        os.close(fd)
-
 
 _CURVE = ec.SECP256R1()
 _CERT_VALIDITY = datetime.timedelta(days=825)

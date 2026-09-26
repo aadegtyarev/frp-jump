@@ -511,13 +511,55 @@ def test_install_service_finds_state_under_sudo_users_own_home(tmp_path, monkeyp
         client_cmds.service_install, "resolve_target_home", lambda: (home, "alice")
     )
     monkeypatch.setattr(
-        client_cmds.service_install, "install", lambda *, user: Path("/etc/systemd/system/x")
+        client_cmds.service_install,
+        "install",
+        lambda *, user, system_user=None: Path("/etc/systemd/system/x"),
     )
 
     result = runner.invoke(client_cmds.app, ["install-service"])
 
     assert result.exit_code == 0, result.output
     assert "not enrolled" not in result.output
+    assert "Installed and started" in result.output
+
+
+def test_enroll_rejects_user_and_system_user_together():
+    result = runner.invoke(
+        client_cmds.app,
+        ["enroll", "https://ctl.example.com", "sometoken", "--user", "--system-user", "x"],
+    )
+    assert result.exit_code == 1
+    assert "mutually exclusive" in result.output
+
+
+def test_install_service_rejects_user_and_system_user_together():
+    result = runner.invoke(
+        client_cmds.app, ["install-service", "--user", "--system-user", "x"]
+    )
+    assert result.exit_code == 1
+    assert "mutually exclusive" in result.output
+
+
+def test_install_service_system_user_mode(tmp_path, monkeypatch):
+    monkeypatch.delenv("FRP_JUMP_DATA_DIR", raising=False)
+    state_dir = tmp_path / "var-lib" / "frp-jump-client"
+    _enrolled_state(state_dir)
+
+    monkeypatch.setattr(client_cmds.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        client_cmds.service_install, "ensure_system_user", lambda name: state_dir
+    )
+    monkeypatch.setattr(
+        client_cmds.service_install,
+        "install",
+        lambda *, user, system_user=None: Path("/etc/systemd/system/x"),
+    )
+
+    result = runner.invoke(
+        client_cmds.app, ["install-service", "--system-user", "frp-jump-client"]
+    )
+
+    assert result.exit_code == 0, result.output
     assert "Installed and started" in result.output
 
 

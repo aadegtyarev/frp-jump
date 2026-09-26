@@ -68,6 +68,9 @@ def test_apply_writes_tls_material_and_starts_process(tmp_path) -> None:
     key_mode = (tmp_path / "tls" / "tls.key").stat().st_mode & 0o777
     assert key_mode == 0o600
     assert (tmp_path / "frpc.toml").exists()
+    # frpc.toml holds every grant's secretKey -- just as secret as tls.key.
+    config_mode = (tmp_path / "frpc.toml").stat().st_mode & 0o777
+    assert config_mode == 0o600
     assert len(supervisor.start_calls) == 1
     assert supervisor.start_calls[0][0] == "/opt/frp/frpc"
 
@@ -143,6 +146,8 @@ def test_relay_driver_writes_tls_material_and_forces_tls(tmp_path) -> None:
     assert (tmp_path / "tls" / "tls.crt").read_bytes() == b"cert"
     config_text = (tmp_path / "frps.toml").read_text()
     assert "force = true" in config_text
+    config_mode = (tmp_path / "frps.toml").stat().st_mode & 0o777
+    assert config_mode == 0o600
     assert len(supervisor.start_calls) == 1
 
 

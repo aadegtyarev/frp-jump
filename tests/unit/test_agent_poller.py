@@ -687,6 +687,60 @@ def test_sync_once_does_not_clobber_a_profile_added_by_a_concurrent_cli_command(
     assert reloaded.profiles == {"wb01": Profile(device_name="wb01", target_port=22)}
 
 
+def test_sync_once_does_not_clobber_a_local_port_pinned_by_a_concurrent_cli_command(
+    tmp_path, monkeypatch
+) -> None:
+    """Reproduces a real bug: `connect --local-port N` writes the pin
+    straight to disk from a separate one-shot process, but a `run` daemon
+    already looping had no entry for that brand-new grant in its own
+    in-memory `local_ports` -- so it allocated a fresh port and
+    immediately saved right over the pin, the same class of bug as the
+    profile-clobbering one above, just for a different field."""
+    from frp_jump.agent.state import save as save_state
+
+    state = _state()
+    save_state(tmp_path, state)  # what's on disk when `run` "started"
+
+    # A separate `client connect --local-port 2222` process pins a port
+    # for a grant the daemon doesn't know about yet.
+    on_disk = load(tmp_path)
+    on_disk.local_ports = {"g1": 2222}
+    save_state(tmp_path, on_disk)
+
+    driver = FakeDriver()
+
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    def fake_get(url, *, headers, timeout):
+        remote = {
+            "exposed": [],
+            "consumed": [
+                {
+                    "grant_id": "g1",
+                    "secret": "s1",
+                    "service_name": "svc-1-22",
+                    "protocol": "ssh",
+                    "exposer_device_name": "wb01",
+                    "target_port": 22,
+                }
+            ],
+        }
+        return httpx.Response(200, json=remote, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    monkeypatch.setattr(poller.httpx, "get", fake_get)
+
+    ssh_config_path = tmp_path / "ssh_config_real"
+    poller.sync_once(
+        state, driver, data_dir=tmp_path, ssh_config_path=ssh_config_path, port_range=_PORT_RANGE
+    )
+
+    reloaded = load(tmp_path)
+    assert reloaded.local_ports["g1"] == 2222
+    assert driver.applied[-1].consumed[0].local_bind_port == 2222
+
+
 def test_disable_device_posts_to_the_disable_endpoint(monkeypatch) -> None:
     state = _state()
     captured = {}

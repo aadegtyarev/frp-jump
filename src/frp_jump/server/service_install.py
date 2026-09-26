@@ -36,7 +36,7 @@ _ADMIN_WRAPPER_PATH = Path("/usr/local/bin/frp-jump-server")
 
 # The dedicated system account's data dir is 0700 (see bootstrap._ensure_data_dir)
 # -- only it, or root, can read the database at all. Without this, "SSH access
-# to the box is the admin boundary" (see docs/architecture.md) is only true
+# to the box is the admin boundary" (see docs/security.md) is only true
 # for root: everyone else would need to know to type `sudo -u <system_user>
 # env FRP_JUMP_DATA_DIR=<data_dir> <exec_path> ...` by hand for every single
 # admin command. This wrapper does that instead, so anyone who can `sudo` on

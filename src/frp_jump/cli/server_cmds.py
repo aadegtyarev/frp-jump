@@ -1,7 +1,7 @@
 """`frp-jump-server ...` -- bootstrap and run the control-plane + relay, and
 every admin action: registering users by SSH key, and managing devices/
 enroll-tokens on their behalf. There is no WebUI -- this CLI, run over SSH
-to the server box, is the entire admin surface (see docs/architecture.md)."""
+to the server box, is the entire admin surface (see docs/security.md)."""
 
 from __future__ import annotations
 
@@ -160,7 +160,7 @@ def init() -> None:
 
     Run this once, before the first `frp-jump-server run`. Configure
     FRP_JUMP_RELAY_PUBLIC_ADDR (or relay_public_addr in the config file)
-    first -- see the README for the full list of required settings.
+    first -- see docs/configuration.md for every setting this reads.
 
     Example:
 
@@ -289,7 +289,7 @@ def install_service(
         "control-plane API directly over HTTPS -- e.g. certbot's "
         "fullchain.pem. Must be given together with --tls-key. Without "
         "either, the API binds 127.0.0.1 only and expects your own "
-        "TLS-terminating reverse proxy in front (see the README) -- "
+        "TLS-terminating reverse proxy in front (see docs/configuration.md) -- "
         "`server run` refuses to bind a public address with no TLS.",
     ),
     tls_key_file: Path | None = typer.Option(
@@ -574,7 +574,7 @@ def devices_list(
         "[dim]\"relayed today\" is bytes actually relayed through this server -- a "
         "connection that's genuinely peer-to-peer reports nothing here even while "
         "carrying real traffic (frp itself never counts p2p bytes anywhere). See "
-        "docs/architecture.md's \"Relayed-traffic visibility\" section.[/dim]"
+        "docs/how-it-works.md's \"What this doesn't do\" section.[/dim]"
     )
 
 

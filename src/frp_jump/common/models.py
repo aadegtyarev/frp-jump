@@ -36,7 +36,7 @@ None of this is enforced by frps/mTLS directly -- a device whose frpc is
 already connected keeps that connection (and whatever it was last
 configured to relay) until it
 reconnects or the relay restarts. Hard revocation means rotating the CA.
-See docs/architecture.md.
+See docs/security.md.
 """
 
 from __future__ import annotations

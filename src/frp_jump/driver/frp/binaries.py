@@ -10,7 +10,7 @@ attacker who can tamper with one response can tamper with both). A
 stronger guarantee would mean pinning the expected per-arch digests next
 to ``frp_version`` in settings.py instead of trusting a file fetched at
 install time; not done here -- acceptable for this project's threat model
-(see README), but worth revisiting if that changes.
+(see docs/security.md), but worth revisiting if that changes.
 """
 
 from __future__ import annotations

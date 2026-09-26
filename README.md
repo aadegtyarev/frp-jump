@@ -93,13 +93,20 @@ if anything below is unclear (`frp-jump-client <command> --help`).
 On the **server** (a box with a public IP/domain):
 
 ```sh
-sudo frp-jump-server install-service --relay-public-addr tunnel.example.com
+sudo frp-jump-server install-service --relay-public-addr tunnel.example.com \
+  --tls-cert /etc/letsencrypt/live/tunnel.example.com/fullchain.pem \
+  --tls-key /etc/letsencrypt/live/tunnel.example.com/privkey.pem
 ```
 
 That one command creates a dedicated, unprivileged `frp-jump` system user,
 bootstraps the CA/database under its own `/var/lib/frp-jump`, and installs
-+ starts a hardened systemd unit — see "systemd" below. To do it by hand
-instead:
++ starts a hardened systemd unit serving real HTTPS directly — see
+"systemd" below. `server run` refuses to serve the control-plane API in
+cleartext on a public address (it carries mTLS certs and bearer tokens on
+every call) — no `--tls-cert`/`--tls-key`? Drop them and it binds
+`127.0.0.1` only, and you put your own TLS-terminating reverse proxy (a
+couple of lines of nginx/Caddy config) in front of it instead — either
+way works, pick whichever you already have. To do it by hand instead:
 
 ```sh
 export FRP_JUMP_RELAY_PUBLIC_ADDR=tunnel.example.com   # or a bare IP
@@ -129,9 +136,8 @@ Run as root, `enroll` also installs and starts the systemd service right
 away; otherwise it tells you to run one of these next:
 
 ```sh
-frp-jump-client install-service                                  # system-wide, needs root
-frp-jump-client install-service --user                            # your own account, no root needed
-frp-jump-client install-service --system-user frp-jump-client     # isolated account (created for you)
+frp-jump-client install-service          # isolated system account, created for you (needs root)
+frp-jump-client install-service --user   # your own account instead, no root needed
 ```
 
 From there, everything is self-service — no more admin action needed for
@@ -189,19 +195,21 @@ to start without it.
 
 ## Ports and firewalls
 
-**On the server**, open these inbound (both plain TCP, no exotic
-protocols):
+**On the server**, open these inbound:
 
 | Port | Setting | What it's for |
 | --- | --- | --- |
-| 8443/tcp | `api_port` | The agent-facing HTTPS API (enroll, heartbeat, desired-state, self-service) |
 | 7000/tcp | `relay_bind_port` | frps control channel, dialed by every enrolled device's frpc |
+| 8443/tcp | `api_port` | The agent-facing HTTPS API — **only** if you gave `install-service` `--tls-cert`/`--tls-key` (direct TLS). Using a reverse proxy instead? Open *its* port (typically 443), not this one — `api_host` stays `127.0.0.1` and never needs a firewall rule. |
 
 `frps_admin_port` (7500) is bound to `127.0.0.1` only and never needs a
-firewall rule.
+firewall rule either way. `server run` refuses to bind `api_host` to
+anything but `127.0.0.1` without TLS configured, so there's no way to
+end up accidentally serving the API in cleartext to the internet.
 
-**On every client device**, allow *outbound* to those same two ports on
-your relay. p2p (`xtcp`) hole-punching also needs outbound UDP to work —
+**On every client device**, allow *outbound* to the relay's `relay_bind_port`
+and whichever port actually reaches the control-plane API. p2p (`xtcp`)
+hole-punching also needs outbound UDP to work —
 a firewall that blocks it (or restricts frpc's ephemeral source ports)
 won't break anything outright, but every connection will silently fall
 back to relay instead of going peer-to-peer, since the relay fallback
@@ -211,18 +219,27 @@ only ever bound to `127.0.0.1`, so it never needs a firewall rule either.
 
 ## systemd
 
-**Client** — `frp-jump-client install-service [--user | --system-user
-NAME]` generates and enables the unit for you (see "Quick start" above).
-Which mode to pick:
+**Client** — `frp-jump-client install-service [--user]` generates and
+enables the unit for you (see "Quick start" above). By default, a
+dedicated, unprivileged `frp-jump-client` system account is created
+automatically — least-privilege, zero extra thinking. Which mode to pick:
 
 - A device that *consumes* an SSH grant needs the agent running as the
   actual human (so it can maintain their real `~/.ssh/config`) — use
   `--user`, or point `FRP_JUMP_SSH_CONFIG_PATH` at that person's config
   explicitly.
 - A device that only *exposes* services (e.g. a Wiren Board controller),
-  or consumes without needing `ssh <name>` to just work, is fine as a
-  system service or under `--system-user` — an isolated, least-privilege
-  account created for you.
+  or consumes without needing `ssh <name>` to just work, is fine with the
+  default.
+
+Already enrolled the traditional way (as yourself, or root on a
+no-other-account device)? The default keeps using that instead of
+creating a new account, so it never orphans already-enrolled state — and
+if the dedicated account genuinely can't reach the installed binary (e.g.
+a personal venv under a home directory other accounts can't traverse
+into), it falls back to your own account rather than failing. Explicit
+`--system-user NAME` remains available if you want a name other than the
+default.
 
 Reach for [`packaging/systemd/`](packaging/systemd/) directly only for a
 manual or packaged (`.deb`) install.

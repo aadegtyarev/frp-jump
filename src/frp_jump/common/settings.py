@@ -86,6 +86,12 @@ class Settings(BaseSettings):
     api_port: int = 8443
     tls_cert_file: Path | None = None
     tls_key_file: Path | None = None
+    # `server run` refuses to bind a non-loopback api_host with no TLS
+    # configured (mTLS certs and api_tokens would otherwise cross the
+    # network in cleartext) -- this is the explicit, opt-in override for
+    # someone who genuinely has TLS terminated elsewhere on a path this
+    # process can't see (e.g. a cloud load balancer on a private network).
+    allow_insecure_bind: bool = False
     # Used only to render clickable enroll URLs, e.g. "https://tunnel.example.com".
     public_base_url: str | None = None
 

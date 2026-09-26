@@ -131,6 +131,64 @@ def chown_tree(path: Path, name: str) -> None:
         shutil.chown(child, user=name, group=name, follow_symlinks=False)
 
 
+#: Auto-created (not opt-in) when `install`/`enroll` run as root with
+#: neither --user nor --system-user given -- see `resolve_default_target`.
+_DEFAULT_SYSTEM_USER = "frp-jump-client"
+
+
+def _world_traversable(path: Path) -> bool:
+    """Whether every directory from ``/`` down to (not including)
+    ``path`` grants "other" execute -- what a brand-new system account
+    with no supplementary groups needs to actually reach it. A personal
+    `pip install --user`/venv commonly lives inside a home directory
+    that blocks exactly this (some distros now default new accounts to
+    mode 0750, not the traditional 0755) -- checked here so that gets
+    caught with a clear fallback instead of a confusing "Permission
+    denied" crash loop in the installed unit's own journal."""
+    current = Path("/")
+    for part in path.resolve().parent.parts[1:]:
+        current = current / part
+        if not (current.stat().st_mode & 0o001):
+            return False
+    return True
+
+
+def resolve_default_target(
+    exec_path: str, *, default_system_user: str = _DEFAULT_SYSTEM_USER
+) -> tuple[Path, str | None]:
+    """Where a plain `enroll`/`install-service` (no --user, no
+    --system-user) run as root should read/write state, and which
+    account the installed unit should run as.
+
+    Already enrolled the traditional way -- an unprivileged `enroll`
+    (writes under the real person's own home), possibly followed much
+    later by a separate `sudo install-service`? Keep using that. Picking
+    a fresh, empty dedicated account here instead would silently orphan
+    already-enrolled state, turning a perfectly working two-step setup
+    into a confusing "not enrolled" -- continuity with whatever already
+    exists always wins over a "better" default.
+
+    Only for a genuinely fresh device (nothing enrolled yet at that
+    traditional location -- the common case being `sudo enroll ...`
+    itself as the very first command run) does this prefer an isolated,
+    unprivileged system account over running as a real person or root --
+    and only when that account could actually execute ``exec_path`` in
+    the first place (see ``_world_traversable``). When it can't, this
+    falls back to ``resolve_target_home``'s result (the real person
+    behind ``sudo``, or root itself on a dedicated, no-other-account
+    device) -- silently succeeding, even if not maximally isolated, beats
+    a confusing failure. An *explicit* ``--system-user`` is a different
+    story -- that one is meant to fail loudly if it can't work, see
+    ``install``."""
+    home, run_as_user = resolve_target_home()
+    legacy_data_dir = home / ".local" / "share" / "frp-jump"
+    if state_path(legacy_data_dir).is_file():
+        return legacy_data_dir, run_as_user
+    if _world_traversable(Path(exec_path)):
+        return ensure_system_user(default_system_user), default_system_user
+    return legacy_data_dir, run_as_user
+
+
 def resolve_target_home() -> tuple[Path, str | None]:
     """Where this device's state should live, and who should own the
     systemd unit that runs it. Not just ``Path.home()`` -- when running
@@ -177,25 +235,40 @@ def install(*, user: bool = False, system_user: str | None = None) -> Path:
 
     Three mutually exclusive modes:
 
-    - Neither flag (default): system-wide, requires root, runs as the
-      person who invoked `sudo` (or plain root, on a root-only device).
+    - Neither flag (default): an isolated, unprivileged system account is
+      created automatically (see ``resolve_default_target``) -- falling
+      back to the person who invoked `sudo` (or plain root, on a
+      root-only device) only if that account couldn't actually reach the
+      binary. Requires root.
     - ``user=True``: a per-user unit under ``~/.config/systemd/user``, no
       root needed -- but only runs while that account has a lingering/
       logged-in session, unless `loginctl enable-linger` is also set up.
     - ``system_user=<name>``: requires root; creates (if missing) a
       dedicated, unprivileged system account with no login shell of its
       own and runs the unit as it, isolated from both root and any real
-      person's account -- see ``ensure_system_user``.
+      person's account -- see ``ensure_system_user``. Unlike the default
+      mode above, this is an explicit request: it fails loudly (rather
+      than silently falling back) if that account can't reach the binary.
     """
     if user and system_user:
         raise ServiceInstallError("--user and --system-user are mutually exclusive")
     data_dir_override = os.environ.get("FRP_JUMP_DATA_DIR")
     env_line = ""
+    exec_path = resolve_exec_path()
 
     if system_user:
         if os.geteuid() != 0:
             raise ServiceInstallError("--system-user requires root -- rerun with sudo")
         data_dir = ensure_system_user(system_user)
+        if not _world_traversable(Path(exec_path)):
+            raise ServiceInstallError(
+                f"{system_user!r} would not be able to execute {exec_path} -- a "
+                "directory along that path (commonly a personal home directory) "
+                "blocks access for accounts other than its owner. Either make "
+                "every directory in that path world-traversable (o+x), install "
+                "frp-jump-client somewhere world-reachable (e.g. the apt package, "
+                "or a system-wide venv), or use --user instead."
+            )
         run_as_user = system_user
         unit_dir = _SYSTEM_UNIT_DIR
         wanted_by = "multi-user.target"
@@ -214,11 +287,12 @@ def install(*, user: bool = False, system_user: str | None = None) -> Path:
                 "installing a system-wide service requires root -- rerun with sudo, "
                 "or pass --user to install a per-user service under your own account"
             )
-        home, run_as_user = resolve_target_home()
-        data_dir = home / ".local" / "share" / "frp-jump"
+        data_dir, run_as_user = resolve_default_target(exec_path)
         unit_dir = _SYSTEM_UNIT_DIR
         wanted_by = "multi-user.target"
         systemctl = ["systemctl"]
+        if not data_dir_override:
+            env_line = f"Environment=FRP_JUMP_DATA_DIR={data_dir}\n"
 
     _require_enrolled_state(data_dir_override, data_dir, as_user=run_as_user)
 
@@ -227,7 +301,7 @@ def install(*, user: bool = False, system_user: str | None = None) -> Path:
     user_line = f"User={run_as_user}\n" if run_as_user else ""
     unit_path.write_text(
         _UNIT_TEMPLATE.format(
-            exec_path=resolve_exec_path(),
+            exec_path=exec_path,
             wanted_by=wanted_by,
             user_line=user_line,
             env_line=env_line,

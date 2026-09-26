@@ -494,6 +494,44 @@ def test_set_key_rejects_an_empty_pub_file(tmp_path):
     assert "empty" in result.output
 
 
+def test_status_flags_an_exposed_port_nothing_is_listening_on(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    monkeypatch.setattr(
+        poller,
+        "fetch_desired_state",
+        lambda state: {
+            "exposed": [{"grant_id": "g1", "target_port": 8080}],
+            "consumed": [],
+        },
+    )
+    monkeypatch.setattr(poller, "is_listening", lambda port: False)
+
+    result = runner.invoke(client_cmds.app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "8080" in result.output
+    assert "no -- nothing is listening" in result.output
+
+
+def test_status_reports_an_exposed_port_that_is_listening(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    monkeypatch.setattr(
+        poller,
+        "fetch_desired_state",
+        lambda state: {
+            "exposed": [{"grant_id": "g1", "target_port": 22}],
+            "consumed": [],
+        },
+    )
+    monkeypatch.setattr(poller, "is_listening", lambda port: True)
+
+    result = runner.invoke(client_cmds.app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "22" in result.output
+    assert "yes" in result.output
+
+
 def test_doctor_reports_a_compatible_protocol_version(tmp_path, monkeypatch):
     _enrolled_state(tmp_path)
     monkeypatch.setattr(client_cmds.poller, "send_heartbeat", lambda state, agent_version: None)

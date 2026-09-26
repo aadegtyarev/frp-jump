@@ -927,13 +927,22 @@ def test_set_key_raises_sync_error_when_the_final_step_fails(monkeypatch, tmp_pa
 
 
 def test_is_bindable_reports_a_free_port_as_bindable() -> None:
-    assert poller.is_bindable(40009) is True
+    # Let the OS pick an ephemeral port, then release it immediately --
+    # a hardcoded port in frp-jump's own default agent_local_port_range
+    # can collide with a real frp-jump-client daemon actually running on
+    # the same machine (e.g. this project's own dev/test box).
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    assert poller.is_bindable(port) is True
 
 
 def test_is_bindable_reports_an_in_use_port_as_not_bindable() -> None:
     blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    blocker.bind(("127.0.0.1", 40008))
+    blocker.bind(("127.0.0.1", 0))
+    port = blocker.getsockname()[1]
     try:
-        assert poller.is_bindable(40008) is False
+        assert poller.is_bindable(port) is False
     finally:
         blocker.close()

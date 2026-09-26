@@ -130,6 +130,67 @@ def test_install_system_wide_sets_user_line_for_sudo_user(tmp_path, monkeypatch)
     assert "User=alice\n" in unit_path.read_text()
 
 
+def test_install_defaults_to_auto_system_user_on_a_fresh_device(tmp_path, monkeypatch):
+    # No state.json anywhere -- a genuinely fresh device, most likely
+    # `sudo enroll ...` run as the very first command.
+    home = tmp_path / "home" / "alice"
+    monkeypatch.setattr(service_install.os, "geteuid", lambda: 0)
+    monkeypatch.setenv("SUDO_USER", "alice")
+    monkeypatch.setattr(
+        service_install.pwd,
+        "getpwnam",
+        lambda name: pwd.struct_passwd(("alice", "x", 1001, 1001, "", str(home), "/bin/bash")),
+    )
+    monkeypatch.setattr(service_install.shutil, "which", lambda name: "/usr/bin/frp-jump-client")
+    monkeypatch.setattr(service_install.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(service_install, "_world_traversable", lambda path: True)
+    dedicated_dir = tmp_path / "var-lib" / "frp-jump-client"
+    dedicated_dir.mkdir(parents=True)
+    # `enroll` (run as root, no flags) would have already written state
+    # here, into whatever `resolve_default_target` decided, before ever
+    # calling `install()` -- simulate that having already happened.
+    (dedicated_dir / "state.json").write_text("{}")
+    monkeypatch.setattr(service_install, "ensure_system_user", lambda name: dedicated_dir)
+    unit_dir = tmp_path / "etc-systemd"
+    monkeypatch.setattr(service_install, "_SYSTEM_UNIT_DIR", unit_dir)
+
+    unit_path = service_install.install(user=False)
+
+    assert "User=frp-jump-client\n" in unit_path.read_text()
+    assert f"Environment=FRP_JUMP_DATA_DIR={dedicated_dir}\n" in unit_path.read_text()
+
+
+def test_install_falls_back_to_sudo_user_when_dedicated_account_cannot_reach_binary(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home" / "alice"
+    home.mkdir(parents=True)
+    # enroll would have written state here once install() falls back to
+    # this location -- simulate that having already happened in the same
+    # `sudo enroll` invocation this mirrors (enroll and install-service
+    # must agree on this before install() ever runs, in the real CLI).
+    state_dir = home / ".local" / "share" / "frp-jump"
+    state_dir.mkdir(parents=True)
+    (state_dir / "state.json").write_text("{}")
+
+    monkeypatch.setattr(service_install.os, "geteuid", lambda: 0)
+    monkeypatch.setenv("SUDO_USER", "alice")
+    monkeypatch.setattr(
+        service_install.pwd,
+        "getpwnam",
+        lambda name: pwd.struct_passwd(("alice", "x", 1001, 1001, "", str(home), "/bin/bash")),
+    )
+    monkeypatch.setattr(service_install.shutil, "which", lambda name: "/usr/bin/frp-jump-client")
+    monkeypatch.setattr(service_install.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(service_install, "_world_traversable", lambda path: False)
+    unit_dir = tmp_path / "etc-systemd"
+    monkeypatch.setattr(service_install, "_SYSTEM_UNIT_DIR", unit_dir)
+
+    unit_path = service_install.install(user=False)
+
+    assert "User=alice\n" in unit_path.read_text()
+
+
 def test_ensure_system_user_creates_a_missing_user(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(
@@ -205,6 +266,7 @@ def test_install_system_user_sets_user_line_and_env(tmp_path, monkeypatch):
     monkeypatch.setattr(service_install, "ensure_system_user", lambda name: state_dir)
     monkeypatch.setattr(service_install.shutil, "which", lambda name: "/usr/bin/frp-jump-client")
     monkeypatch.setattr(service_install.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(service_install, "_world_traversable", lambda path: True)
     unit_dir = tmp_path / "etc-systemd"
     monkeypatch.setattr(service_install, "_SYSTEM_UNIT_DIR", unit_dir)
 
@@ -225,6 +287,7 @@ def test_install_system_user_respects_data_dir_override(tmp_path, monkeypatch):
     monkeypatch.setattr(service_install, "ensure_system_user", lambda name: state_dir)
     monkeypatch.setattr(service_install.shutil, "which", lambda name: "/usr/bin/frp-jump-client")
     monkeypatch.setattr(service_install.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(service_install, "_world_traversable", lambda path: True)
     unit_dir = tmp_path / "etc-systemd"
     monkeypatch.setattr(service_install, "_SYSTEM_UNIT_DIR", unit_dir)
 

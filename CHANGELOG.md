@@ -6,6 +6,41 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-09-26
+
+### Added
+
+- **`server run` refuses to bind a non-loopback `api_host` with no TLS
+  configured.** Every enroll/heartbeat call carries mTLS certs and
+  bearer tokens -- serving that in cleartext to the network was
+  previously just a yellow warning, now it's a hard refusal (with a new
+  `FRP_JUMP_ALLOW_INSECURE_BIND` escape hatch for TLS genuinely
+  terminated elsewhere on a path this process can't see).
+- **`frp-jump-server install-service --tls-cert/--tls-key`**: serve real
+  HTTPS directly (e.g. certbot's cert), instead of the previous
+  implicit "configure it yourself or get a yellow warning." Without
+  either, the generated config now explicitly binds `127.0.0.1` and
+  expects your own reverse proxy in front -- either path starts cleanly
+  with no further config needed.
+- **`frp-jump-client install-service`/`enroll` (run as root, no flags)
+  now create a dedicated, unprivileged `frp-jump-client` system account
+  automatically**, instead of running as root or the invoking person's
+  own account. Already enrolled the traditional way? That's preserved,
+  not orphaned. Can't reach the installed binary from a fresh account
+  (e.g. a personal venv under a home directory other accounts can't
+  traverse into)? Falls back automatically instead of failing.
+- **`frp-jump-client status`'s "Exposed" table gained a "Listening"
+  column** -- a live, local check of whether anything is actually
+  listening on each exposed port, since `connect` never validates that a
+  target port is even in use before wiring up the tunnel to it.
+
+### Fixed
+
+- A pre-existing test hardcoded a port in the agent's own default local
+  port range, which could spuriously fail on a machine that also runs a
+  real `frp-jump-client` daemon (as this project's own dev box does) --
+  now picks a free ephemeral port instead.
+
 ## [0.3.5] - 2026-09-26
 
 More findings from the same Fable security review, plus a real

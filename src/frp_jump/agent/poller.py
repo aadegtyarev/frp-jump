@@ -76,6 +76,26 @@ def is_bindable(port: int) -> bool:
         return True
 
 
+def is_listening(port: int, *, timeout: float = 0.5) -> bool:
+    """Whether something is actually accepting connections on
+    ``127.0.0.1:port`` right now -- the mirror-image check to
+    ``is_bindable``, used by `status` to tell a *service that hasn't
+    been declared to expose anything on this port* apart from *nothing
+    is actually listening there yet, even though a grant expects it to
+    be* (e.g. `connect wb01:8080` was run before whatever should be on
+    8080 was even started). This is advisory only -- frp itself never
+    checks this, and doesn't need to: `driver/frp/config.py` configures
+    the proxy regardless, and a connection through it simply fails
+    (connection refused) until something starts listening."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(timeout)
+        try:
+            sock.connect(("127.0.0.1", port))
+        except OSError:
+            return False
+        return True
+
+
 def _allocate_local_port(port_range: range, taken: set[int]) -> int:
     """Pick a free port from ``port_range``, skipping anything already
     handed to another grant this cycle. Binding it here is still a TOCTOU

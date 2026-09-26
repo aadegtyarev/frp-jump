@@ -65,16 +65,33 @@ def _read_env_value(env_path: Path, key: str) -> str | None:
     return None
 
 
-def install(*, system_user: str = "frp-jump", relay_public_addr: str | None = None) -> Path:
+def install(
+    *,
+    system_user: str = "frp-jump",
+    relay_public_addr: str | None = None,
+    tls_cert_file: Path | None = None,
+    tls_key_file: Path | None = None,
+) -> Path:
     """Create (if missing) a dedicated system account, its config file and
     data directory, bootstrap the CA/database in it, and a hardened
     systemd unit -- then `enable --now` it. Returns the unit path.
     Requires root. Safe to rerun (e.g. after upgrading the binary) -- an
-    already-existing env file is left alone, so ``relay_public_addr`` is
-    only required the first time.
+    already-existing env file is left alone, so ``relay_public_addr``/
+    ``tls_cert_file``/``tls_key_file`` are only used the first time.
+
+    ``server run`` refuses to bind a non-loopback ``api_host`` with no TLS
+    configured (see its own docstring) -- so this either writes
+    ``tls_cert_file``/``tls_key_file`` into the env file (serving real TLS
+    directly), or, if neither is given, defaults to
+    ``FRP_JUMP_API_HOST=127.0.0.1`` and expects the operator to front that
+    with their own TLS-terminating reverse proxy (this project's own
+    production deployment does exactly that). Either way, the service
+    starts successfully with no further config needed.
     """
     if os.geteuid() != 0:
         raise ServiceInstallError("installing the service requires root -- rerun with sudo")
+    if bool(tls_cert_file) != bool(tls_key_file):
+        raise ServiceInstallError("--tls-cert and --tls-key must be given together")
 
     data_dir = ensure_system_user(system_user)
 
@@ -85,10 +102,17 @@ def install(*, system_user: str = "frp-jump", relay_public_addr: str | None = No
                 "--relay-public-addr is required the first time -- the address "
                 "other devices will use to reach this server"
             )
+        lines = [
+            f"FRP_JUMP_DATA_DIR={data_dir}",
+            f"FRP_JUMP_RELAY_PUBLIC_ADDR={relay_public_addr}",
+        ]
+        if tls_cert_file and tls_key_file:
+            lines.append(f"FRP_JUMP_TLS_CERT_FILE={tls_cert_file}")
+            lines.append(f"FRP_JUMP_TLS_KEY_FILE={tls_key_file}")
+        else:
+            lines.append("FRP_JUMP_API_HOST=127.0.0.1")
         env_path.parent.mkdir(parents=True, exist_ok=True)
-        env_path.write_text(
-            f"FRP_JUMP_DATA_DIR={data_dir}\nFRP_JUMP_RELAY_PUBLIC_ADDR={relay_public_addr}\n"
-        )
+        env_path.write_text("\n".join(lines) + "\n")
         env_path.chmod(0o640)
         shutil.chown(env_path, user=system_user, group=system_user)
 

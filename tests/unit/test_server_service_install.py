@@ -52,7 +52,11 @@ def test_install_writes_env_file_and_bootstraps(tmp_path, monkeypatch):
 
     env_path = env_dir / "frp-jump.env"
     assert env_path.is_file()
-    assert "FRP_JUMP_RELAY_PUBLIC_ADDR=tunnel.example.com" in env_path.read_text()
+    env_text = env_path.read_text()
+    assert "FRP_JUMP_RELAY_PUBLIC_ADDR=tunnel.example.com" in env_text
+    # No --tls-cert/--tls-key given -- defaults to loopback-only, since
+    # `server run` refuses a public bind with no TLS configured.
+    assert "FRP_JUMP_API_HOST=127.0.0.1" in env_text
     assert (env_path.stat().st_mode & 0o777) == 0o640
     assert bootstrapped["relay_public_addr"] == "tunnel.example.com"
     assert bootstrapped["data_dir"] == data_dir
@@ -62,6 +66,51 @@ def test_install_writes_env_file_and_bootstraps(tmp_path, monkeypatch):
     assert "User=frp-jump" in content
     assert f"EnvironmentFile={env_path}" in content
     assert "ExecStart=/usr/bin/frp-jump-server run" in content
+
+
+def test_install_writes_tls_paths_instead_of_loopback_when_given(tmp_path, monkeypatch):
+    data_dir = tmp_path / "var-lib" / "frp-jump"
+    env_dir = tmp_path / "etc-frp-jump"
+    unit_dir = tmp_path / "etc-systemd"
+
+    monkeypatch.setattr(service_install.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(service_install, "ensure_system_user", lambda name: data_dir)
+    monkeypatch.setattr(service_install, "_ENV_DIR", env_dir)
+    monkeypatch.setattr(service_install, "_SYSTEM_UNIT_DIR", unit_dir)
+    monkeypatch.setattr(service_install, "chown_tree", lambda path, name: None)
+    monkeypatch.setattr(service_install.shutil, "chown", lambda *a, **k: None)
+    monkeypatch.setattr(
+        service_install, "resolve_exec_path", lambda name: "/usr/bin/frp-jump-server"
+    )
+    monkeypatch.setattr(service_install.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        bootstrap,
+        "initialize",
+        lambda settings: bootstrap.BootstrapResult(
+            data_dir=settings.data_dir, db_path=settings.data_dir / "db.sqlite3", ca_cert_pem=b""
+        ),
+    )
+
+    service_install.install(
+        system_user="frp-jump",
+        relay_public_addr="tunnel.example.com",
+        tls_cert_file=tmp_path / "fullchain.pem",
+        tls_key_file=tmp_path / "privkey.pem",
+    )
+
+    env_text = (env_dir / "frp-jump.env").read_text()
+    assert f"FRP_JUMP_TLS_CERT_FILE={tmp_path / 'fullchain.pem'}" in env_text
+    assert f"FRP_JUMP_TLS_KEY_FILE={tmp_path / 'privkey.pem'}" in env_text
+    assert "FRP_JUMP_API_HOST" not in env_text
+
+
+def test_install_rejects_tls_cert_without_tls_key(monkeypatch, tmp_path):
+    monkeypatch.setattr(service_install.os, "geteuid", lambda: 0)
+
+    with pytest.raises(service_install.ServiceInstallError, match="--tls-cert and --tls-key"):
+        service_install.install(
+            relay_public_addr="tunnel.example.com", tls_cert_file=tmp_path / "fullchain.pem"
+        )
 
 
 def test_install_reruns_without_relay_public_addr_using_existing_env(tmp_path, monkeypatch):

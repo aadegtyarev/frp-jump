@@ -6,6 +6,7 @@ to the server box, is the entire admin surface (see docs/architecture.md)."""
 from __future__ import annotations
 
 import datetime
+import ipaddress
 import sys
 from pathlib import Path
 
@@ -55,6 +56,22 @@ console = Console()
 
 def _open_db(settings: Settings) -> Session:
     return make_session(make_engine(bootstrap.db_path(settings)))
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Whether ``host`` (an ``api_host`` value) never leaves this machine
+    on its own -- "localhost" and any ``127.0.0.0/8``/``::1`` literal.
+    A hostname that isn't literally "localhost" is treated as NOT
+    loopback (even if it happens to resolve there today) -- this gates a
+    security check, and a config that only *happens* to be safe by way of
+    DNS is exactly the kind of thing worth requiring to be explicit
+    instead."""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _read_public_key(path: Path) -> str:
@@ -169,18 +186,40 @@ def run() -> None:
     engine = make_engine(bootstrap.db_path(settings))
     web_app = create_app(settings=settings, engine=engine, ca=ca)
 
+    has_tls = bool(settings.tls_cert_file and settings.tls_key_file)
     ssl_kwargs = {}
-    if settings.tls_cert_file and settings.tls_key_file:
+    if has_tls:
         ssl_kwargs = {
             "ssl_certfile": str(settings.tls_cert_file),
             "ssl_keyfile": str(settings.tls_key_file),
         }
-    else:
+    elif _is_loopback_host(settings.api_host):
         console.print(
             "[yellow]no tls_cert_file/tls_key_file configured -- serving the control-plane "
-            "API as plain HTTP. Fine behind your own TLS-terminating reverse proxy; "
-            "otherwise set FRP_JUMP_TLS_CERT_FILE/FRP_JUMP_TLS_KEY_FILE.[/yellow]"
+            f"API as plain HTTP on {settings.api_host} only. Fine behind your own "
+            "TLS-terminating reverse proxy.[/yellow]"
         )
+    elif settings.allow_insecure_bind:
+        console.print(
+            f"[yellow]FRP_JUMP_ALLOW_INSECURE_BIND is set -- serving the control-plane API "
+            f"as plain HTTP on {settings.api_host}, not just loopback. Every enroll/heartbeat "
+            "call (mTLS certs, bearer tokens) crosses whatever network reaches this host in "
+            "cleartext unless something else is genuinely terminating TLS in front of "
+            "it.[/yellow]"
+        )
+    else:
+        console.print(
+            f"[red]refusing to start: api_host={settings.api_host!r} is reachable from "
+            "outside this machine, and no TLS is configured.[/red]\n"
+            "Every enroll/heartbeat call carries mTLS certs and bearer tokens -- serving "
+            "that in cleartext to the network is not a safe default. Fix one of:\n"
+            "  - set FRP_JUMP_TLS_CERT_FILE/FRP_JUMP_TLS_KEY_FILE to a real certificate\n"
+            "  - set FRP_JUMP_API_HOST=127.0.0.1 and put your own TLS-terminating reverse "
+            "proxy in front (the documented deployment)\n"
+            "  - set FRP_JUMP_ALLOW_INSECURE_BIND=true if TLS is genuinely terminated "
+            "elsewhere on a path this process can't see"
+        )
+        raise typer.Exit(1)
 
     try:
         uvicorn.run(web_app, host=settings.api_host, port=settings.api_port, **ssl_kwargs)
@@ -203,6 +242,19 @@ def install_service(
         "tunnel.example.com. Required the first time; a rerun (e.g. after "
         "upgrading the binary) reuses whatever is already configured.",
     ),
+    tls_cert_file: Path | None = typer.Option(
+        None,
+        "--tls-cert",
+        help="Path to a real TLS certificate (full chain) to serve the "
+        "control-plane API directly over HTTPS -- e.g. certbot's "
+        "fullchain.pem. Must be given together with --tls-key. Without "
+        "either, the API binds 127.0.0.1 only and expects your own "
+        "TLS-terminating reverse proxy in front (see the README) -- "
+        "`server run` refuses to bind a public address with no TLS.",
+    ),
+    tls_key_file: Path | None = typer.Option(
+        None, "--tls-key", help="Path to the private key matching --tls-cert."
+    ),
 ) -> None:
     """One-shot setup: create a dedicated system user, bootstrap the CA/
     database, write config to /etc/frp-jump/<system-user>.env, and
@@ -217,11 +269,18 @@ def install_service(
 
         sudo frp-jump-server install-service --relay-public-addr tunnel.example.com
 
+        sudo frp-jump-server install-service --relay-public-addr tunnel.example.com \\
+            --tls-cert /etc/letsencrypt/live/tunnel.example.com/fullchain.pem \\
+            --tls-key /etc/letsencrypt/live/tunnel.example.com/privkey.pem
+
         sudo frp-jump-server install-service
     """
     try:
         unit_path = service_install.install(
-            system_user=system_user, relay_public_addr=relay_public_addr
+            system_user=system_user,
+            relay_public_addr=relay_public_addr,
+            tls_cert_file=tls_cert_file,
+            tls_key_file=tls_key_file,
         )
     except service_install.ServiceInstallError as exc:
         console.print(f"[red]{exc}[/red]")

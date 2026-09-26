@@ -66,18 +66,20 @@ def _require_state(settings: Settings):
 def _settings_for_service_ops(*, user_service: bool, system_user: str | None = None) -> Settings:
     """`Settings()`, with `data_dir` corrected for `sudo` -- shared by
     `enroll` (before writing state) and `install-service` (before
-    checking for it), so both agree on where state lives when run via
-    sudo as a real person's own account rather than a genuine root login.
-    Without this, `sudo`'s default `env_reset`/`secure_path` policy sets
+    checking for it), so both agree on where state lives.
+
+    ``system_user`` takes priority -- it points at a dedicated, isolated
+    account's own state directory instead (see
+    `service_install.ensure_system_user`), creating that account if it
+    doesn't exist yet. Otherwise, running as root with no `--user` uses
+    `service_install.resolve_default_target` -- the same
+    auto-dedicated-account-if-reachable-else-fall-back-to-sudo's-real-user
+    decision `install()` makes, so both land in the same place. Without
+    matching this, `sudo`'s default `env_reset`/`secure_path` policy sets
     `$HOME` to root's home, so a plain `Settings()` here would look in
     `/root` even though `enroll` (run unprivileged, the whole point of
     this two-step flow) wrote state under the invoking person's own home
-    -- see `service_install.resolve_target_home`'s docstring.
-
-    ``system_user`` takes priority over the sudo-aware resolution above --
-    it points at a dedicated, isolated account's own state directory
-    instead (see `service_install.ensure_system_user`), creating that
-    account if it doesn't exist yet."""
+    -- see `service_install.resolve_target_home`'s docstring."""
     settings = Settings()
     if system_user:
         if os.geteuid() != 0:
@@ -85,8 +87,8 @@ def _settings_for_service_ops(*, user_service: bool, system_user: str | None = N
             raise typer.Exit(1)
         settings.data_dir = service_install.ensure_system_user(system_user)
     elif os.geteuid() == 0 and not user_service and "FRP_JUMP_DATA_DIR" not in os.environ:
-        home, _ = service_install.resolve_target_home()
-        settings.data_dir = home / ".local" / "share" / "frp-jump"
+        exec_path = service_install.resolve_exec_path()
+        settings.data_dir, _ = service_install.resolve_default_target(exec_path)
     return settings
 
 
@@ -195,15 +197,15 @@ def enroll_cmd(
         False,
         "--user",
         help="If run as root, install the systemd service under your own "
-        "account afterwards instead of system-wide. Ignored when not root.",
+        "account afterwards instead of an isolated one. Ignored when not root.",
     ),
     system_user: str | None = typer.Option(
         None,
         "--system-user",
-        help="Create (if missing) and enroll as a dedicated, unprivileged "
-        "system account with this name, instead of your own account or "
-        "root -- e.g. --system-user frp-jump-client. Requires root; "
-        "mutually exclusive with --user.",
+        help="Enroll as a dedicated, unprivileged system account with this "
+        "name (created if missing) instead of the default. Requires root; "
+        "mutually exclusive with --user. You normally don't need this -- "
+        "see the note above about the default.",
     ),
 ) -> None:
     """Trade a one-time enroll token, or your own registered SSH key, for
@@ -217,6 +219,12 @@ def enroll_cmd(
 
     Run as root, this also installs and starts the systemd service right
     away; otherwise it prints the `install-service` command to run next.
+    By default (no --user/--system-user), a dedicated, unprivileged
+    `frp-jump-client` system account is created for you automatically --
+    least-privilege with zero extra thinking. It falls back to your own
+    account only if that account genuinely can't reach the installed
+    binary (e.g. it lives inside a personal venv under a home directory
+    other accounts can't traverse into).
 
     Examples:
 
@@ -224,8 +232,7 @@ def enroll_cmd(
 
         frp-jump-client enroll https://tunnel.example.com ~/.ssh/id_ed25519 --name laptop
 
-        sudo frp-jump-client enroll https://tunnel.example.com abc123... \\
-            --name laptop --system-user frp-jump-client
+        sudo frp-jump-client enroll https://tunnel.example.com abc123... --name laptop
     """
     if user_service and system_user:
         console.print("[red]--user and --system-user are mutually exclusive[/red]")
@@ -287,9 +294,10 @@ def enroll_cmd(
         except service_install.ServiceInstallError:
             exec_path = "frp-jump-client"
         console.print(
-            f"Next: [bold]sudo {exec_path} install-service[/bold] (system-wide), "
-            "[bold]frp-jump-client install-service --user[/bold] (your own account), "
-            "or just [bold]frp-jump-client run[/bold] in the foreground."
+            f"Next: [bold]sudo {exec_path} install-service[/bold] (isolated system "
+            "account, created for you), [bold]frp-jump-client install-service "
+            "--user[/bold] (your own account), or just [bold]frp-jump-client "
+            "run[/bold] in the foreground."
         )
 
 
@@ -298,21 +306,31 @@ def install_service_cmd(
     user: bool = typer.Option(
         False,
         "--user",
-        help="Install under your own account instead of system-wide (no root needed).",
+        help="Install under your own account instead of an isolated one (no "
+        "root needed).",
     ),
     system_user: str | None = typer.Option(
         None,
         "--system-user",
-        help="Run as a dedicated, unprivileged system account with this name "
-        "(created if missing) instead of your own account or root -- e.g. "
-        "--system-user frp-jump-client. Requires root; mutually exclusive "
-        "with --user. If you haven't enrolled yet, use `enroll --system-user "
-        "<name>` instead, so enrollment itself also lands in that account.",
+        help="Use a dedicated, unprivileged system account with this name "
+        "instead of the default. Requires root; mutually exclusive with "
+        "--user. You normally don't need this -- see the note above about "
+        "the default.",
     ),
 ) -> None:
     """Install and enable the systemd service that keeps `run` going across
     reboots. Safe to rerun any time, e.g. after upgrading the binary -- it
     refreshes the unit to point at wherever `frp-jump-client` currently is.
+
+    By default (no --user/--system-user), a dedicated, unprivileged
+    `frp-jump-client` system account is created for you automatically the
+    first time -- least-privilege with zero extra thinking. Already
+    enrolled the traditional way (as yourself, or root on a device with no
+    other account)? This keeps using that instead, so it never orphans
+    already-enrolled state. And if the dedicated account genuinely can't
+    reach the installed binary (e.g. it lives inside a personal venv under
+    a home directory other accounts can't traverse into), this falls back
+    to your own account rather than failing.
 
     If you installed with `pip install --user`/pipx and `sudo
     frp-jump-client install-service` fails with "command not found", sudo's
@@ -322,10 +340,8 @@ def install_service_cmd(
     `--user` only keeps running while you have an active login session --
     it stops the moment you log out, unless you also run `sudo loginctl
     enable-linger $(whoami)` once to let it keep running regardless.
-    Without `--user` (the default, system-wide), this doesn't apply -- it
-    runs regardless of who's logged in. `--system-user` doesn't apply
-    either way -- it's an isolated account of its own, not tied to any
-    login session.
+    Without `--user`, this doesn't apply -- it runs regardless of who's
+    logged in.
 
     Examples:
 
@@ -334,8 +350,6 @@ def install_service_cmd(
         sudo $(which frp-jump-client) install-service
 
         frp-jump-client install-service --user
-
-        sudo frp-jump-client install-service --system-user frp-jump-client
     """
     if user and system_user:
         console.print("[red]--user and --system-user are mutually exclusive[/red]")
@@ -462,8 +476,14 @@ def status_cmd() -> None:
     console.print("\n[bold]Exposed[/bold] -- other devices can reach these ports on you")
     exposed = Table()
     exposed.add_column("Port")
+    exposed.add_column("Listening")
     for g in remote["exposed"]:
-        exposed.add_row(str(g["target_port"]))
+        port = g["target_port"]
+        listening = poller.is_listening(port)
+        exposed.add_row(
+            str(port),
+            "[green]yes[/green]" if listening else "[red]no -- nothing is listening here[/red]",
+        )
     console.print(exposed)
 
     profile_by_target = {

@@ -77,12 +77,12 @@ RUN rm -rf "${PREFIX}/python/.temp" "${PREFIX}/python/.lock" "${PREFIX}/python/.
 RUN PYBIN=$(echo "${PREFIX}"/python/cpython-"${PY_VERSION}".*/bin/python3) \
     && test -x "$PYBIN" \
     && ok=false \
-    && for attempt in 1 2 3 4 5 6; do \
+    && for attempt in $(seq 1 16); do \
         if uv pip install --python "$PYBIN" --target "${PREFIX}/site-packages" "frp-jump==${FRP_JUMP_VERSION}"; then \
             ok=true; break; \
         fi; \
-        echo "frp-jump==${FRP_JUMP_VERSION} not resolvable yet (attempt ${attempt}/6), retrying in 15s..."; \
-        sleep 15; \
+        echo "frp-jump==${FRP_JUMP_VERSION} not resolvable yet (attempt ${attempt}/16), retrying in 20s..."; \
+        sleep 20; \
     done \
     && [ "$ok" = true ]
 

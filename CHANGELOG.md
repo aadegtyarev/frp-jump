@@ -6,6 +6,21 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-09-26
+
+### Added
+
+- **`--version`** on both `frp-jump-client` and `frp-jump-server` (also
+  shown in `--help`) -- prints the installed package version and exits.
+
+### Changed
+
+- Widened the `.deb` build's retry window for the just-published version
+  to actually show up on PyPI's simple index (16 attempts, 20s apart,
+  up from 6x15s) -- this had already needed a manual rerun three times
+  this project's history; the propagation lag observed this time
+  (several minutes) was longer than the previous window covered.
+
 ## [0.3.6] - 2026-09-26
 
 ### Added

@@ -44,6 +44,25 @@ except PackageNotFoundError:
     _AGENT_VERSION = "dev"
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        console.print(_AGENT_VERSION)
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version_: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the installed frp-jump version and exit.",
+    ),
+) -> None:
+    pass
+
+
 def _ssh_config_path(settings: Settings) -> Path:
     return settings.ssh_config_path or (Path.home() / ".ssh" / "config")
 

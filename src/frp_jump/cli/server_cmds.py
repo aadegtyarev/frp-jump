@@ -53,6 +53,32 @@ except ModuleNotFoundError as exc:
 app = typer.Typer(help="Run and manage the frp-jump server (control-plane + relay).")
 console = Console()
 
+try:
+    from importlib.metadata import PackageNotFoundError, version
+
+    _PACKAGE_VERSION = version("frp-jump")
+except PackageNotFoundError:
+    _PACKAGE_VERSION = "dev"
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        console.print(_PACKAGE_VERSION)
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version_: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the installed frp-jump version and exit.",
+    ),
+) -> None:
+    pass
+
 
 def _open_db(settings: Settings) -> Session:
     return make_session(make_engine(bootstrap.db_path(settings)))

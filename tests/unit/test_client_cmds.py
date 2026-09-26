@@ -719,3 +719,10 @@ def test_devices_delete_prunes_profiles_pointing_at_the_deleted_device(tmp_path,
 
     assert result.exit_code == 0, result.output
     assert list(load(tmp_path).profiles) == ["other"]
+
+
+def test_version_flag_prints_the_installed_version_and_exits():
+    result = runner.invoke(client_cmds.app, ["--version"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == client_cmds._AGENT_VERSION

@@ -89,3 +89,10 @@ def test_install_service_reports_a_clean_error(monkeypatch):
 
     assert result.exit_code == 1
     assert "boom" in result.output
+
+
+def test_version_flag_prints_the_installed_version_and_exits():
+    result = runner.invoke(server_cmds.app, ["--version"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == server_cmds._PACKAGE_VERSION

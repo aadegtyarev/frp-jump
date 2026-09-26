@@ -41,7 +41,7 @@ class ServiceInstallError(RuntimeError):
     pass
 
 
-def _resolve_exec_path() -> str:
+def resolve_exec_path() -> str:
     """The absolute path to *this* `frp-jump-client` binary -- so the
     generated unit keeps working under a venv, a self-contained `.deb`
     install, or any other layout, without hardcoding one."""
@@ -135,7 +135,7 @@ def install(*, user: bool = False) -> Path:
     user_line = f"User={run_as_user}\n" if run_as_user else ""
     unit_path.write_text(
         _UNIT_TEMPLATE.format(
-            exec_path=_resolve_exec_path(), wanted_by=wanted_by, user_line=user_line
+            exec_path=resolve_exec_path(), wanted_by=wanted_by, user_line=user_line
         )
     )
     unit_path.chmod(0o644)

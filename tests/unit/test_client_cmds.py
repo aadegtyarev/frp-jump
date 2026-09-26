@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
@@ -492,6 +494,31 @@ def test_commands_require_enrollment_first(tmp_path):
         result = runner.invoke(client_cmds.app, args)
         assert result.exit_code == 1, args
         assert "not enrolled" in result.output, args
+
+
+def test_install_service_finds_state_under_sudo_users_own_home(tmp_path, monkeypatch):
+    """Regression test: enroll unprivileged (state under the real
+    person's home), then `sudo frp-jump-client install-service` -- the
+    pre-flight `_require_state` check must resolve the same sudo-aware
+    home as `service_install.install` itself does, not root's."""
+    monkeypatch.delenv("FRP_JUMP_DATA_DIR", raising=False)
+    home = tmp_path / "home" / "alice"
+    _enrolled_state(home / ".local" / "share" / "frp-jump")
+
+    monkeypatch.setattr(client_cmds.os, "geteuid", lambda: 0)
+    monkeypatch.setenv("SUDO_USER", "alice")
+    monkeypatch.setattr(
+        client_cmds.service_install, "resolve_target_home", lambda: (home, "alice")
+    )
+    monkeypatch.setattr(
+        client_cmds.service_install, "install", lambda *, user: Path("/etc/systemd/system/x")
+    )
+
+    result = runner.invoke(client_cmds.app, ["install-service"])
+
+    assert result.exit_code == 0, result.output
+    assert "not enrolled" not in result.output
+    assert "Installed and started" in result.output
 
 
 def test_disconnect_succeeds_and_keeps_the_profile_even_if_already_gone_server_side(

@@ -62,6 +62,23 @@ def _require_state(settings: Settings):
     return state
 
 
+def _settings_for_service_ops(*, user_service: bool) -> Settings:
+    """`Settings()`, with `data_dir` corrected for `sudo` -- shared by
+    `enroll` (before writing state) and `install-service` (before
+    checking for it), so both agree on where state lives when run via
+    sudo as a real person's own account rather than a genuine root login.
+    Without this, `sudo`'s default `env_reset`/`secure_path` policy sets
+    `$HOME` to root's home, so a plain `Settings()` here would look in
+    `/root` even though `enroll` (run unprivileged, the whole point of
+    this two-step flow) wrote state under the invoking person's own home
+    -- see `service_install.resolve_target_home`'s docstring."""
+    settings = Settings()
+    if os.geteuid() == 0 and not user_service and "FRP_JUMP_DATA_DIR" not in os.environ:
+        home, _ = service_install.resolve_target_home()
+        settings.data_dir = home / ".local" / "share" / "frp-jump"
+    return settings
+
+
 def _make_driver(settings: Settings) -> FrpDriver:
     binaries = ensure_installed(settings.data_dir / "bin", version=settings.frp_version)
     return FrpDriver(
@@ -191,17 +208,8 @@ def enroll_cmd(
 
         frp-jump-client enroll https://tunnel.example.com abc123... --name laptop
     """
-    settings = Settings()
+    settings = _settings_for_service_ops(user_service=user_service)
     keyfile_path = Path(token_or_keyfile).expanduser()
-
-    # Keep this consistent with what `install-service` will look for --
-    # see `service_install.resolve_target_home`'s docstring: run via sudo
-    # as root, this would otherwise write state under /root while the
-    # auto-installed system-wide service looks under the invoking
-    # person's own home, and never finds it.
-    if os.geteuid() == 0 and not user_service and "FRP_JUMP_DATA_DIR" not in os.environ:
-        home, _ = service_install.resolve_target_home()
-        settings.data_dir = home / ".local" / "share" / "frp-jump"
 
     try:
         if keyfile_path.is_file():
@@ -243,8 +251,18 @@ def enroll_cmd(
         else:
             console.print(f"[green]Service installed and started[/green] ({unit_path}).")
     else:
+        # `sudo` resets PATH to its own secure_path, which never includes a
+        # per-user install location like ~/.local/bin -- "sudo
+        # frp-jump-client ..." then fails with "command not found" even
+        # though it works fine unprivileged (a real case hit in testing).
+        # Print the resolved absolute path for the sudo variant specifically
+        # so copy-pasting the hint always works.
+        try:
+            exec_path = service_install.resolve_exec_path()
+        except service_install.ServiceInstallError:
+            exec_path = "frp-jump-client"
         console.print(
-            "Next: [bold]sudo frp-jump-client install-service[/bold] (system-wide), "
+            f"Next: [bold]sudo {exec_path} install-service[/bold] (system-wide), "
             "[bold]frp-jump-client install-service --user[/bold] (your own account), "
             "or just [bold]frp-jump-client run[/bold] in the foreground."
         )
@@ -262,13 +280,26 @@ def install_service_cmd(
     reboots. Safe to rerun any time, e.g. after upgrading the binary -- it
     refreshes the unit to point at wherever `frp-jump-client` currently is.
 
+    If you installed with `pip install --user`/pipx and `sudo
+    frp-jump-client install-service` fails with "command not found", sudo's
+    own PATH doesn't include your user install location -- use the full
+    path instead: `sudo $(which frp-jump-client) install-service`.
+
+    `--user` only keeps running while you have an active login session --
+    it stops the moment you log out, unless you also run `sudo loginctl
+    enable-linger $(whoami)` once to let it keep running regardless.
+    Without `--user` (the default, system-wide), this doesn't apply -- it
+    runs regardless of who's logged in.
+
     Examples:
 
         sudo frp-jump-client install-service
 
+        sudo $(which frp-jump-client) install-service
+
         frp-jump-client install-service --user
     """
-    settings = Settings()
+    settings = _settings_for_service_ops(user_service=user)
     _require_state(settings)
     try:
         unit_path = service_install.install(user=user)
@@ -276,6 +307,11 @@ def install_service_cmd(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
     console.print(f"[green]Installed and started[/green] ({unit_path}).")
+    if user:
+        console.print(
+            "[yellow]Note:[/yellow] a --user service stops when you log out, unless you "
+            "also run [bold]sudo loginctl enable-linger $(whoami)[/bold] once."
+        )
 
 
 @app.command("set-key")

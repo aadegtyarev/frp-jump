@@ -6,6 +6,33 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-26
+
+Two real-world rough edges hit within hours of 0.3.0 shipping, both around
+`enroll`-unprivileged-then-`install-service`-via-`sudo`:
+
+### Fixed
+
+- `sudo frp-jump-client install-service` failed with "command not found"
+  when installed via `pip install --user`/pipx -- `sudo`'s own
+  `secure_path` never includes a per-user install location. `enroll`'s
+  printed hint now substitutes the resolved absolute path for the `sudo`
+  variant specifically, so copy-pasting it always works; `install-service
+  --help` documents the `sudo $(which frp-jump-client) ...` workaround
+  too.
+- `sudo frp-jump-client install-service` (or `sudo $(which ...)`) could
+  itself report "not enrolled" even right after a successful unprivileged
+  `enroll` -- its own pre-flight check used a plain `Settings()`, which
+  under `sudo`'s default `env_reset` resolves `$HOME` to root's, not the
+  invoking person's. `install-service`'s check now shares the same
+  `$SUDO_USER`-aware home resolution `service_install.install` already
+  used internally (`client_cmds._settings_for_service_ops`), so the two
+  agree on where state lives.
+- `install-service --user`'s help text and console output now say
+  outright that it stops on logout unless `sudo loginctl enable-linger
+  $(whoami)` is also run once -- previously only mentioned in a
+  docstring nobody reading `--help` would see.
+
 ## [0.3.0] - 2026-09-26
 
 **Breaking.** The WebUI, email/password accounts, and device/grant

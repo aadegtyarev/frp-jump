@@ -8,6 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from frp_jump.cli import server_cmds
+from frp_jump.driver.base import ServiceProtocol
 from frp_jump.server import registry
 
 runner = CliRunner()
@@ -167,3 +168,96 @@ def test_devices_list_shows_online_and_offline(db_session, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "online" in result.output
     assert "offline" in result.output
+
+
+def test_devices_list_shows_relayed_traffic_per_connection(db_session, monkeypatch):
+    admin = _make_user(db_session)
+    issued_exposer = registry.create_enroll_token(
+        db_session, device_name_hint="wb01", created_by=admin.id, ttl=_TTL
+    )
+    exposer = registry.redeem_enroll_token(db_session, issued_exposer.token, cert_serial="1")
+    issued_consumer = registry.create_enroll_token(
+        db_session, device_name_hint="laptop", created_by=admin.id, ttl=_TTL
+    )
+    consumer = registry.redeem_enroll_token(db_session, issued_consumer.token, cert_serial="2")
+
+    service = registry.create_service(
+        db_session,
+        device_id=exposer.device.id,
+        name="svc-wb01-22",
+        target_port=22,
+        protocol=ServiceProtocol.SSH,
+    )
+    grant = registry.create_grant(
+        db_session, service_id=service.id, consumer_device_id=consumer.device.id
+    )
+
+    monkeypatch.setattr(
+        server_cmds, "fetch_all_proxy_traffic", lambda admin_port: {grant.id: (100, 200)}
+    )
+    monkeypatch.setattr(
+        server_cmds, "_open_db", lambda settings: contextlib.nullcontext(db_session)
+    )
+
+    result = runner.invoke(server_cmds.app, ["devices", "list"])
+
+    assert result.exit_code == 0, result.output
+    assert "relayed today" in result.output
+    assert "100" in result.output and "200" in result.output
+    assert "peer-to-peer" in result.output
+
+
+class _OrderTrackingDbContext:
+    """Wraps a real db_session so a test can observe *when* the DB session
+    closes relative to other calls -- used to prove the DB is never held
+    open across a blocking frps admin-API call (see devices_list/users_show:
+    a long-open read transaction there can make a concurrent device's
+    heartbeat commit fail with "database is locked")."""
+
+    def __init__(self, session, events: list[str]):
+        self._session = session
+        self._events = events
+
+    def __enter__(self):
+        return self._session
+
+    def __exit__(self, *exc_info):
+        self._events.append("db_closed")
+        return False
+
+
+def test_devices_list_closes_db_before_querying_frps_traffic(db_session, monkeypatch):
+    events: list[str] = []
+    monkeypatch.setattr(
+        server_cmds, "_open_db", lambda settings: _OrderTrackingDbContext(db_session, events)
+    )
+
+    def fake_fetch(admin_port):
+        events.append("frps_queried")
+        return {}
+
+    monkeypatch.setattr(server_cmds, "fetch_all_proxy_traffic", fake_fetch)
+
+    result = runner.invoke(server_cmds.app, ["devices", "list"])
+
+    assert result.exit_code == 0, result.output
+    assert events == ["db_closed", "frps_queried"]
+
+
+def test_users_show_closes_db_before_querying_frps_traffic(db_session, monkeypatch):
+    admin = _make_user(db_session)
+    events: list[str] = []
+    monkeypatch.setattr(
+        server_cmds, "_open_db", lambda settings: _OrderTrackingDbContext(db_session, events)
+    )
+
+    def fake_fetch(admin_port):
+        events.append("frps_queried")
+        return {}
+
+    monkeypatch.setattr(server_cmds, "fetch_all_proxy_traffic", fake_fetch)
+
+    result = runner.invoke(server_cmds.app, ["users", "show", admin.label])
+
+    assert result.exit_code == 0, result.output
+    assert events == ["db_closed", "frps_queried"]

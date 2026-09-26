@@ -32,7 +32,7 @@ try:
 
     from frp_jump.common.models import User
     from frp_jump.driver.frp.binaries import ensure_installed
-    from frp_jump.driver.frp.driver import FrpsRelayDriver, fetch_proxy_traffic
+    from frp_jump.driver.frp.driver import FrpsRelayDriver, fetch_all_proxy_traffic
     from frp_jump.server import bootstrap, registry, service_install
     from frp_jump.server.app import create_app
     from frp_jump.server.db import Session, make_engine, make_session
@@ -137,13 +137,17 @@ def _format_bytes(n: int) -> str:
     return f"{value:.1f}TB"
 
 
-def _relayed_today(settings: Settings, grant_id: str) -> str | None:
-    """`None` when frps has no data at all (not running, or this grant has
-    never connected) -- distinct from "0 bytes relayed", which means it
-    connected but stayed peer-to-peer. See `driver.frp.driver
-    .fetch_proxy_traffic`'s docstring for why this can only ever show
-    relayed traffic, never a p2p connection's."""
-    traffic = fetch_proxy_traffic(settings.frps_admin_port, grant_id)
+def _relayed_today(traffic_by_grant: dict[str, tuple[int, int]], grant_id: str) -> str | None:
+    """`None` when this grant has no data at all (frps unreachable, or it
+    has never connected) -- distinct from "0 bytes relayed", which means
+    it connected but stayed peer-to-peer. See `driver.frp.driver
+    .fetch_all_proxy_traffic`'s docstring for why this can only ever show
+    relayed traffic, never a p2p connection's. Takes the whole map (one
+    upfront `fetch_all_proxy_traffic` call) rather than looking up a
+    single grant itself, so reporting on many grants at once
+    (`devices list`/`users show`) costs one HTTP request, not one per
+    grant."""
+    traffic = traffic_by_grant.get(grant_id)
     if traffic is None:
         return None
     bytes_in, bytes_out = traffic
@@ -421,6 +425,7 @@ def users_list() -> None:
     for u in users:
         table.add_row(u.label, u.fingerprint, str(u.device_count))
     console.print(table)
+    console.print("[dim]See a user's devices and connections: `users show <label>`.[/dim]")
 
 
 @users_app.command("show")
@@ -432,26 +437,46 @@ def users_show(label: str = typer.Argument(..., help="User label, from `users li
         frp-jump-server users show alice
     """
     settings = Settings()
+    # Same reasoning as devices_list: gather everything from the DB and
+    # close the session before the frps admin-API calls below, so a slow
+    # frps doesn't hold a read transaction open across a concurrent
+    # device's heartbeat commit.
     with _open_db(settings) as db:
         user = _require_user(db, label)
         devices = registry.list_devices_for_owner(db, user.id)
-        console.print(f"[bold]{label}[/bold] ({user.ssh_key_fingerprint})")
-        if not devices:
-            console.print("  (no devices)")
-        for d in devices:
-            status = "enabled" if d.enabled else "[yellow]disabled[/yellow]"
-            last_seen = d.last_seen_at.isoformat() if d.last_seen_at else "never"
-            console.print(f"  [bold]{d.name}[/bold] -- {status}, last seen {last_seen}")
-            for g in registry.exposed_grants_for_device(db, d.id):
-                traffic = _relayed_today(settings, g.grant_id)
-                suffix = f" -- {traffic}" if traffic else ""
-                console.print(f"    exposes :{g.target_port}{suffix}")
-            for g in registry.consumed_grants_for_device(db, d.id):
-                traffic = _relayed_today(settings, g.grant_id)
-                suffix = f" -- {traffic}" if traffic else ""
-                console.print(
-                    f"    -> {g.exposer_device_name}:{g.target_port} ({g.protocol.value}){suffix}"
-                )
+        fingerprint = user.ssh_key_fingerprint
+        grants_by_device = {
+            d.id: (
+                registry.exposed_grants_for_device(db, d.id),
+                registry.consumed_grants_for_device(db, d.id),
+            )
+            for d in devices
+        }
+
+    traffic_by_grant = fetch_all_proxy_traffic(settings.frps_admin_port)
+    console.print(f"[bold]{label}[/bold] ({fingerprint})")
+    if not devices:
+        console.print("  (no devices)")
+    for d in devices:
+        status = "enabled" if d.enabled else "[yellow]disabled[/yellow]"
+        last_seen = d.last_seen_at.isoformat() if d.last_seen_at else "never"
+        console.print(f"  [bold]{d.name}[/bold] -- {status}, last seen {last_seen}")
+        exposed, consumed = grants_by_device[d.id]
+        for g in exposed:
+            traffic = _relayed_today(traffic_by_grant, g.grant_id)
+            suffix = f" -- {traffic}" if traffic else ""
+            console.print(f"    exposes :{g.target_port}{suffix}")
+        for g in consumed:
+            traffic = _relayed_today(traffic_by_grant, g.grant_id)
+            suffix = f" -- {traffic}" if traffic else ""
+            console.print(
+                f"    -> {g.exposer_device_name}:{g.target_port} ({g.protocol.value}){suffix}"
+            )
+    console.print(
+        "[dim]\"relayed today\" is bytes actually relayed through this server -- a "
+        "connection that's genuinely peer-to-peer reports nothing here even while "
+        "carrying real traffic (frp itself never counts p2p bytes anywhere).[/dim]"
+    )
 
 
 @users_app.command("delete")
@@ -495,38 +520,62 @@ def devices_list(
         frp-jump-server devices list --user alice
     """
     settings = Settings()
+    # Gather everything from the DB first and close the session before
+    # making any frps admin-API calls below -- those are network requests
+    # (up to a 5s timeout each, times however many grants exist) and must
+    # not happen while a read transaction is held open, or a concurrent
+    # device heartbeat (registry.record_heartbeat, every ~2s per device)
+    # can hit SQLite's busy-timeout and fail with "database is locked".
     with _open_db(settings) as db:
         devices = registry.list_devices_view(db)
         if user is not None:
             devices = [d for d in devices if d.owner_label == user]
-        table = Table()
-        table.add_column("Name")
-        table.add_column("Owner")
-        table.add_column("Status")
-        table.add_column("Online")
-        table.add_column("Last seen")
-        table.add_column("Connections")
-        for d in devices:
-            status = "enabled" if d.enabled else "[yellow]disabled[/yellow]"
-            online = (
-                d.last_seen_at is not None
-                and (datetime.datetime.now(datetime.UTC) - d.last_seen_at).total_seconds()
-                <= settings.device_online_threshold_seconds
+        grants_by_device = {
+            d.id: (
+                registry.exposed_grants_for_device(db, d.id),
+                registry.consumed_grants_for_device(db, d.id),
             )
-            online_text = "[green]online[/green]" if online else "[dim]offline[/dim]"
-            last_seen = d.last_seen_at.isoformat() if d.last_seen_at else "never"
-            parts = [
-                f"exposes :{g.target_port}"
-                for g in registry.exposed_grants_for_device(db, d.id)
-            ]
-            parts += [
+            for d in devices
+        }
+
+    traffic_by_grant = fetch_all_proxy_traffic(settings.frps_admin_port)
+    table = Table()
+    table.add_column("Name")
+    table.add_column("Owner")
+    table.add_column("Status")
+    table.add_column("Online")
+    table.add_column("Last seen")
+    table.add_column("Connections")
+    for d in devices:
+        status = "enabled" if d.enabled else "[yellow]disabled[/yellow]"
+        online = (
+            d.last_seen_at is not None
+            and (datetime.datetime.now(datetime.UTC) - d.last_seen_at).total_seconds()
+            <= settings.device_online_threshold_seconds
+        )
+        online_text = "[green]online[/green]" if online else "[dim]offline[/dim]"
+        last_seen = d.last_seen_at.isoformat() if d.last_seen_at else "never"
+        exposed, consumed = grants_by_device[d.id]
+        parts = []
+        for g in exposed:
+            traffic = _relayed_today(traffic_by_grant, g.grant_id)
+            parts.append(f"exposes :{g.target_port}" + (f" ({traffic})" if traffic else ""))
+        for g in consumed:
+            traffic = _relayed_today(traffic_by_grant, g.grant_id)
+            parts.append(
                 f"-> {g.exposer_device_name}:{g.target_port}"
-                for g in registry.consumed_grants_for_device(db, d.id)
-            ]
-            table.add_row(
-                d.name, d.owner_label, status, online_text, last_seen, ", ".join(parts) or "—"
+                + (f" ({traffic})" if traffic else "")
             )
+        table.add_row(
+            d.name, d.owner_label, status, online_text, last_seen, ", ".join(parts) or "—"
+        )
     console.print(table)
+    console.print(
+        "[dim]\"relayed today\" is bytes actually relayed through this server -- a "
+        "connection that's genuinely peer-to-peer reports nothing here even while "
+        "carrying real traffic (frp itself never counts p2p bytes anywhere). See "
+        "docs/architecture.md's \"Relayed-traffic visibility\" section.[/dim]"
+    )
 
 
 @devices_app.command("delete")

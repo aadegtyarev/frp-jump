@@ -14,7 +14,7 @@ reports per-grant state as ``UNKNOWN`` rather than querying it; see
 docs/architecture.md for what a future improvement here would need
 (e.g. tailing frpc's log for hole-punch/fallback messages instead).
 
-Traffic accounting (see ``fetch_proxy_traffic``) has the mirror-image
+Traffic accounting (see ``fetch_all_proxy_traffic``) has the mirror-image
 limitation, verified by reading fatedier/frp's own source
 (``server/proxy/xtcp.go`` vs. ``server/proxy/stcp.go``/``proxy.go``): frps
 only ever counts bytes for a proxy whose data actually flows through it.
@@ -41,7 +41,7 @@ from frp_jump.driver.base import (
     DriverStatus,
     RelayState,
 )
-from frp_jump.driver.frp.config import build_frpc_config, build_frps_config, stcp_proxy_name
+from frp_jump.driver.frp.config import build_frpc_config, build_frps_config
 from frp_jump.driver.frp.process import ProcessSupervisor, SubprocessSupervisor
 
 
@@ -49,27 +49,30 @@ def _fingerprint(config: dict) -> str:
     return hashlib.sha256(tomli_w.dumps(config).encode("utf-8")).hexdigest()
 
 
-def fetch_proxy_traffic(
-    admin_port: int, grant_id: str, *, timeout: float = 5.0
-) -> tuple[int, int] | None:
-    """Query the relay's own local admin API for one grant's *relayed*
-    traffic -- frps's ``todayTrafficIn``/``todayTrafficOut`` counters for
-    its ``stcp`` proxy (see this module's docstring for why that's the
-    only traffic frp itself ever tracks). Returns ``(bytes_in, bytes_out)``
-    -- a same-day rolling counter, not a since-this-connection total -- or
-    ``None`` if frps isn't reachable or has no record of this grant yet
-    (nothing has connected through it)."""
+def fetch_all_proxy_traffic(admin_port: int, *, timeout: float = 5.0) -> dict[str, tuple[int, int]]:
+    """Query the relay's own local admin API for every grant's *relayed*
+    traffic in one request -- frps's ``todayTrafficIn``/``todayTrafficOut``
+    counters for each ``stcp`` proxy (see this module's docstring for why
+    that's the only traffic frp itself ever tracks), keyed by grant_id
+    (undoing ``stcp_proxy_name``). One batched call instead of one per
+    grant matters for `devices list`/`users show`, which may report on
+    many grants at once. Returns ``{}`` if frps isn't reachable; a grant_id
+    missing from the result means frps has no record of it yet (nothing
+    has connected through it) -- same as a per-grant ``None`` used to."""
     try:
-        resp = httpx.get(
-            f"http://127.0.0.1:{admin_port}/api/proxy/stcp/{stcp_proxy_name(grant_id)}",
-            timeout=timeout,
-        )
+        resp = httpx.get(f"http://127.0.0.1:{admin_port}/api/proxy/stcp", timeout=timeout)
     except httpx.HTTPError:
-        return None
+        return {}
     if resp.status_code != 200:
-        return None
-    body = resp.json()
-    return body.get("todayTrafficIn", 0), body.get("todayTrafficOut", 0)
+        return {}
+    result: dict[str, tuple[int, int]] = {}
+    suffix = "-stcp"
+    for proxy in resp.json().get("proxies", []):
+        name = proxy.get("name", "")
+        if name.endswith(suffix):
+            grant_id = name[: -len(suffix)]
+            result[grant_id] = (proxy.get("todayTrafficIn", 0), proxy.get("todayTrafficOut", 0))
+    return result
 
 
 def _write_if_changed(path: Path, data: bytes, *, restrictive: bool = False) -> None:

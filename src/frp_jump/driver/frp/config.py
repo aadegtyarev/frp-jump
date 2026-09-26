@@ -37,10 +37,9 @@ def _xtcp_proxy_name(grant_id: str) -> str:
 
 
 def stcp_proxy_name(grant_id: str) -> str:
-    """Public (unlike the other name helpers here): also used by
-    ``driver.frp.driver.fetch_proxy_traffic`` to look up a grant's relayed
-    traffic on frps's admin API by the same name this renders into the
-    frpc config."""
+    """Public (unlike the other name helpers here): the ``-stcp`` suffix
+    is also how ``driver.frp.driver.fetch_all_proxy_traffic`` recovers a
+    grant_id from frps's admin API response, in reverse."""
     return f"{grant_id}-stcp"
 
 

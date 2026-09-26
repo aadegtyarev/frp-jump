@@ -6,6 +6,32 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.12] - 2026-09-26
+
+Found by an Opus code-review pass over this session's own diffs.
+
+### Added
+
+- **`devices list`/`users show` now show relayed traffic per connection**
+  directly (previously only `users show` did, and `devices list` gave no
+  hint the data existed anywhere) -- plus a one-line caveat on both that
+  a silent/zero entry can still be a fully active peer-to-peer
+  connection, not an idle one, since frp itself never counts p2p bytes.
+
+### Fixed
+
+- **`devices list`/`users show` held a SQLite read transaction open
+  while making up to one HTTP call per grant to frps's admin API** (5s
+  timeout each). With many grants, or an unreachable/slow frps, that
+  could hold the transaction open long enough for a concurrent device's
+  heartbeat commit (every ~2s per device) to hit SQLite's busy-timeout
+  and fail with "database is locked". Both commands now finish every DB
+  query and close the session *before* querying frps.
+- Traffic is now fetched with one batched `GET /api/proxy/stcp` call
+  covering every grant (`fetch_all_proxy_traffic`), replacing one
+  request per grant (`fetch_proxy_traffic`, removed) -- faster, and
+  narrows the fix above further by not even needing N round trips.
+
 ## [0.3.11] - 2026-09-26
 
 ### Added

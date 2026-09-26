@@ -252,8 +252,9 @@ falls back to the admin recovery path above.
 
 `frp-jump-server users show`/`devices list` show a compact "relayed
 today: X in / Y out" figure per connection, sourced from frps's own local
-admin API (`driver.frp.driver.fetch_proxy_traffic`, `GET /api/proxy/stcp/
-<name>` on `127.0.0.1:{frps_admin_port}`). This is deliberately scoped to
+admin API (`driver.frp.driver.fetch_all_proxy_traffic`, one `GET
+/api/proxy/stcp` call fetching every grant's counters at once, on
+`127.0.0.1:{frps_admin_port}`). This is deliberately scoped to
 *relayed* traffic only, not total traffic, for a reason grounded in
 frp's own source (`fatedier/frp`): every grant's `stcp`
 proxy always has its data flow through frps by construction, and frps

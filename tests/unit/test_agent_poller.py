@@ -283,10 +283,27 @@ def test_build_desired_state_reclaims_ports_for_grants_no_longer_present(tmp_pat
     assert reloaded.local_ports == {}
 
 
+def _bind_a_port_in_range(port_range: range) -> socket.socket:
+    """A hardcoded port in `_PORT_RANGE` can collide with a real
+    frp-jump-client daemon actually running on the same machine (e.g.
+    this project's own dev box, mid-session, with real grants) -- find
+    whichever one in the range is actually free right now and bind it."""
+    for port in port_range:
+        blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            blocker.bind(("127.0.0.1", port))
+            return blocker
+        except OSError:
+            blocker.close()
+    raise RuntimeError(f"no free port in {port_range} to bind for this test")
+
+
 def test_build_desired_state_revalidates_and_reallocates_when_persisted_port_is_taken(
     tmp_path,
 ) -> None:
-    state = _state(local_ports={"g1": 40001})
+    blocker = _bind_a_port_in_range(_PORT_RANGE)
+    taken_port = blocker.getsockname()[1]
+    state = _state(local_ports={"g1": taken_port})
     remote = {
         "exposed": [],
         "consumed": [
@@ -294,14 +311,12 @@ def test_build_desired_state_revalidates_and_reallocates_when_persisted_port_is_
              "exposer_device_name": "wb01"},
         ],
     }
-    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    blocker.bind(("127.0.0.1", 40001))
     try:
         desired = poller.build_desired_state(
             state, remote, data_dir=tmp_path, port_range=_PORT_RANGE, revalidate=True
         )
-        assert desired.consumed[0].local_bind_port != 40001
-        assert state.local_ports["g1"] != 40001
+        assert desired.consumed[0].local_bind_port != taken_port
+        assert state.local_ports["g1"] != taken_port
     finally:
         blocker.close()
 
@@ -311,7 +326,9 @@ def test_build_desired_state_does_not_revalidate_by_default(tmp_path) -> None:
     something is currently bound to it (e.g. our own already-running frpc) --
     see build_desired_state's docstring for why re-checking every cycle would
     cause the tunnel to restart on every poll."""
-    state = _state(local_ports={"g1": 40001})
+    blocker = _bind_a_port_in_range(_PORT_RANGE)
+    taken_port = blocker.getsockname()[1]
+    state = _state(local_ports={"g1": taken_port})
     remote = {
         "exposed": [],
         "consumed": [
@@ -319,13 +336,11 @@ def test_build_desired_state_does_not_revalidate_by_default(tmp_path) -> None:
              "exposer_device_name": "wb01"},
         ],
     }
-    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    blocker.bind(("127.0.0.1", 40001))
     try:
         desired = poller.build_desired_state(
             state, remote, data_dir=tmp_path, port_range=_PORT_RANGE
         )
-        assert desired.consumed[0].local_bind_port == 40001
+        assert desired.consumed[0].local_bind_port == taken_port
     finally:
         blocker.close()
 

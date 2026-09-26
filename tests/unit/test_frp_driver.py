@@ -1,7 +1,9 @@
 from pathlib import Path
 
+import httpx
+
 from frp_jump.driver.base import ConsumedGrant, DesiredState, DriverStatus, RelayState
-from frp_jump.driver.frp.driver import FrpDriver, FrpsRelayDriver
+from frp_jump.driver.frp.driver import FrpDriver, FrpsRelayDriver, fetch_all_proxy_traffic
 
 _ADMIN_PORT = 17400
 _FALLBACK_TIMEOUT_MS = 1500
@@ -173,3 +175,34 @@ def test_relay_driver_status_and_stop(tmp_path) -> None:
     assert driver.status().running is True
     driver.stop()
     assert driver.status().running is False
+
+
+def test_fetch_all_proxy_traffic_keys_by_grant_id(monkeypatch):
+    def fake_get(url, *, timeout):
+        assert url == "http://127.0.0.1:17400/api/proxy/stcp"
+        return httpx.Response(
+            200,
+            json={
+                "proxies": [
+                    {"name": "g1-stcp", "todayTrafficIn": 100, "todayTrafficOut": 200},
+                    {"name": "g2-stcp", "todayTrafficIn": 0, "todayTrafficOut": 0},
+                    {"name": "not-an-stcp-name"},
+                ]
+            },
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    result = fetch_all_proxy_traffic(_ADMIN_PORT)
+
+    assert result == {"g1": (100, 200), "g2": (0, 0)}
+
+
+def test_fetch_all_proxy_traffic_returns_empty_dict_when_frps_unreachable(monkeypatch):
+    def fake_get(url, *, timeout):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    assert fetch_all_proxy_traffic(_ADMIN_PORT) == {}

@@ -128,12 +128,26 @@ class CertificateAuthority:
     def cert_pem(self) -> bytes:
         return self._ca.cert_pem
 
-    def issue(self, common_name: str, *, san_names: list[str] | None = None) -> KeyCertPair:
-        """Issue a leaf key+cert for a device or the server, signed by this CA.
+    def issue(
+        self, common_name: str, *, san_names: list[str] | None = None, server_auth: bool = False
+    ) -> KeyCertPair:
+        """Issue a leaf key+cert for a device or the relay, signed by this CA.
 
         ``san_names`` may mix hostnames and IP literals (e.g. a real domain
-        for the WebUI, a bare IP for a loopback test); each is encoded as
+        for the relay, a bare IP for a loopback test); each is encoded as
         the correct SAN type automatically.
+
+        ``server_auth`` gates the ``SERVER_AUTH`` EKU -- only the relay's
+        own cert (``bootstrap.py``'s single ``ca.issue("relay", ...,
+        server_auth=True)`` call) needs it, to present as frps's TLS
+        identity. Every *device* cert defaults to ``CLIENT_AUTH`` only:
+        `relay_public_addr` can only ever be a bare hostname/IP (dots are
+        rejected by `registry.validate_name`, which every device name also
+        goes through), but if a device were ever issued `SERVER_AUTH` too
+        and happened to be named identically to it, that device could
+        present a valid-looking relay identity to other devices from an
+        on-path position -- there is no reason for a device cert to be
+        able to do that.
         """
         key = _generate_key()
         subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
@@ -166,7 +180,7 @@ class CertificateAuthority:
                 x509.ExtendedKeyUsage(
                     [
                         x509.oid.ExtendedKeyUsageOID.CLIENT_AUTH,
-                        x509.oid.ExtendedKeyUsageOID.SERVER_AUTH,
+                        *([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH] if server_auth else []),
                     ]
                 ),
                 critical=False,

@@ -6,6 +6,56 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-09-26
+
+More findings from the same Fable security review, plus a real
+compatibility bug this surfaced on our own deployment.
+
+### Fixed
+
+- **Protocol-version check was too strict: it hard-blocked syncing
+  against ANY server that predates the check entirely (every server
+  before 0.3.3), not just a genuinely incompatible one.** A missing
+  `protocol_version` field was treated the same as a confirmed mismatch,
+  so upgrading only the client (or only the server) past 0.3.3 broke
+  syncing with the other side until both were upgraded -- the opposite
+  of the actual goal. Now only an explicit, different version number
+  blocks; a missing field is treated as compatible.
+- **Medium: device certs carried an unnecessary `SERVER_AUTH` EKU.**
+  `relay_public_addr` can't collide with a device name (dots are
+  rejected in both), but there was no reason for a device cert to be
+  able to present as a valid relay TLS identity at all. Only the relay's
+  own cert gets `SERVER_AUTH` now.
+- **Medium: a manually-run `frp-jump-server init` (as opposed to
+  `install-service`) left its data directory at the default umask,** not
+  the `0700` the CA key and database (grant secrets) need regardless of
+  which setup path was used.
+- **Low: an unregistered SSH key fingerprint skipped the signature-
+  verification subprocess entirely on enroll-by-key**, making response
+  timing itself distinguish a registered fingerprint from an unknown one
+  -- exactly the oracle routing both cases through the same error
+  response was meant to close. Now always pays the same cost.
+- **Low: `chown_tree` followed symlinks**, so a planted symlink inside a
+  dedicated account's own directory could get an unrelated path re-owned
+  to that account on a later rerun (as root) of `install-service`.
+- **Low: unauthenticated enroll routes accepted an unbounded
+  `public_key`/`signature` body**, an easy way to inflate the cost of
+  the `ssh-keygen` subprocess they shell out to. Capped to 8KB.
+
+### Changed
+
+- **`frp-jump-server` now fails with one clear line** ("needs the
+  `[server]` extra ... `pip install 'frp-jump[server]'`") instead of a
+  raw `ModuleNotFoundError` traceback, when run without it installed --
+  pip always creates both `frp-jump-client`/`frp-jump-server` commands
+  regardless of which extra was requested, since entry points aren't
+  gated by extras.
+- The control-plane API's root path now returns a generic placeholder
+  page, and FastAPI's auto-generated `/docs`/`/redoc`/`/openapi.json` are
+  disabled -- a relay box is reachable from the whole internet by
+  construction, no reason to hand a scanner a readable schema of what's
+  running there.
+
 ## [0.3.4] - 2026-09-26
 
 Found by an independent Fable review focused on compromise/blast-radius

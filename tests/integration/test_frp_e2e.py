@@ -68,7 +68,7 @@ def test_grant_proxies_traffic_from_consumer_to_exposer(tmp_path, frp_binaries) 
     relay = FrpsRelayDriver(
         binary=frp_binaries.frps, state_dir=tmp_path / "relay", admin_port=_free_port()
     )
-    server_pair = ca.issue("relay", san_names=["127.0.0.1"])
+    server_pair = ca.issue("relay", san_names=["127.0.0.1"], server_auth=True)
     relay.apply(
         RelayState(
             bind_port=relay_port,
@@ -159,7 +159,7 @@ def test_frps_rejects_a_client_whose_cert_chains_to_a_different_ca(tmp_path, frp
     relay = FrpsRelayDriver(
         binary=frp_binaries.frps, state_dir=tmp_path / "relay", admin_port=_free_port()
     )
-    server_pair = real_ca.issue("relay", san_names=["127.0.0.1"])
+    server_pair = real_ca.issue("relay", san_names=["127.0.0.1"], server_auth=True)
     relay.apply(
         RelayState(
             bind_port=relay_port,

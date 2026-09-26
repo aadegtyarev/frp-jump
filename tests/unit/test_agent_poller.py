@@ -92,14 +92,34 @@ def test_fetch_desired_state_raises_on_a_protocol_mismatch(monkeypatch) -> None:
         poller.fetch_desired_state(state)
 
 
-def test_fetch_desired_state_raises_on_a_missing_protocol_version(monkeypatch) -> None:
-    """An older server (predating this field entirely) must be treated the
-    same as a real mismatch, not silently trusted."""
+def test_fetch_desired_state_tolerates_a_missing_protocol_version(monkeypatch) -> None:
+    """A server that predates this field entirely (added in 0.3.3) is not
+    the same as a confirmed mismatch -- treating "unknown" as "different"
+    would hard-block every sync cycle forever against any server that
+    simply hasn't been upgraded yet, which is the opposite of the goal:
+    an old server and a new client (or vice versa) should keep working
+    together on whatever they both already understand."""
     state = _state()
 
     def fake_get(url, *, headers, timeout):
         return httpx.Response(
             200, json={"exposed": [], "consumed": []}, request=httpx.Request("GET", url)
+        )
+
+    monkeypatch.setattr(poller.httpx, "get", fake_get)
+    poller.fetch_desired_state(state)
+
+
+def test_fetch_desired_state_raises_on_an_explicit_protocol_mismatch(monkeypatch) -> None:
+    """An explicitly-reported, different version number is a confirmed
+    mismatch, unlike a merely-absent field -- this must still block."""
+    state = _state()
+
+    def fake_get(url, *, headers, timeout):
+        return httpx.Response(
+            200,
+            json={"exposed": [], "consumed": [], "protocol_version": 999},
+            request=httpx.Request("GET", url),
         )
 
     monkeypatch.setattr(poller.httpx, "get", fake_get)

@@ -106,7 +106,16 @@ def fetch_desired_state(state: AgentState, *, timeout: float = _HTTP_TIMEOUT_SEC
         raise SyncError(f"desired-state fetch failed ({resp.status_code}): {resp.text}")
     body = resp.json()
     server_version = body.get("protocol_version")
-    if server_version != PROTOCOL_VERSION:
+    # A missing field means the server predates this check entirely (it
+    # was only added in 0.3.3) -- not a declared, confirmed incompatible
+    # version. Treating "unknown" the same as "different" would hard-block
+    # every sync cycle against any not-yet-upgraded server forever, which
+    # defeats the actual goal: an old server and a new client (or vice
+    # versa) should keep working together on whatever they both already
+    # understand, only missing out on whichever side's newer features,
+    # until the other side is upgraded too. Only an EXPLICIT, different
+    # version number is treated as a genuine, confirmed mismatch.
+    if server_version is not None and server_version != PROTOCOL_VERSION:
         raise ProtocolMismatchError(
             f"server speaks protocol v{server_version!r}, this client speaks "
             f"v{PROTOCOL_VERSION} -- upgrade whichever side is behind "

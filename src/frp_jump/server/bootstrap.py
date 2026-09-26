@@ -22,6 +22,18 @@ class ConfigError(ValueError):
     pass
 
 
+def _ensure_data_dir(settings: Settings) -> None:
+    """The CA private key and the database (grant secrets, mTLS certs)
+    both live directly under here -- explicitly chmod, since `mkdir`'s own
+    `mode` argument is still subject to the process umask, and this must
+    not end up world- or group-readable regardless of what the operator's
+    umask happens to be (e.g. a plain `frp-jump-server init` run by hand,
+    as opposed to `install-service`, which already chmods its own
+    dedicated account's directory separately)."""
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    settings.data_dir.chmod(0o700)
+
+
 @dataclass(frozen=True, slots=True)
 class BootstrapResult:
     data_dir: Path
@@ -43,7 +55,7 @@ def load_or_create_ca(settings: Settings) -> CertificateAuthority:
         return CertificateAuthority.from_pair(
             KeyCertPair(key_pem=key_path.read_bytes(), cert_pem=cert_path.read_bytes())
         )
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_data_dir(settings)
     ca = CertificateAuthority.bootstrap("frp-jump CA")
     cert_path.write_bytes(ca.cert_pem)
     write_private_key(key_path, ca.pair.key_pem)
@@ -66,7 +78,7 @@ def load_or_create_relay_cert(settings: Settings, ca: CertificateAuthority) -> K
     if cert_path.exists() and key_path.exists():
         return KeyCertPair(key_pem=key_path.read_bytes(), cert_pem=cert_path.read_bytes())
     cert_path.parent.mkdir(parents=True, exist_ok=True)
-    pair = ca.issue("relay", san_names=[settings.relay_public_addr])
+    pair = ca.issue("relay", san_names=[settings.relay_public_addr], server_auth=True)
     cert_path.write_bytes(pair.cert_pem)
     write_private_key(key_path, pair.key_pem)
     return pair
@@ -80,7 +92,7 @@ def initialize(settings: Settings) -> BootstrapResult:
             "devices will use to reach this server, then retry."
         )
 
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_data_dir(settings)
     ca = load_or_create_ca(settings)
     # Creates the sqlite file and every table on first run; a no-op
     # otherwise (SQLModel.metadata.create_all only adds missing tables).

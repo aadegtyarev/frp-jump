@@ -118,10 +118,17 @@ def chown_tree(path: Path, name: str) -> None:
     """`enroll`/`install-service` both run as root while setting this up,
     so files they create are root-owned by default regardless of the
     parent directory's ownership -- the dedicated account (running
-    unprivileged once the service starts) needs to actually own them."""
-    shutil.chown(path, user=name, group=name)
+    unprivileged once the service starts) needs to actually own them.
+
+    ``follow_symlinks=False`` throughout: this walks a directory that
+    (once the service starts) is writable by ``name`` itself, so a
+    symlink planted there pointing outside the tree must never cause a
+    *rerun* of this (as root, e.g. a later ``install-service``) to chown
+    some arbitrary path to that account -- only the link itself is
+    reowned, never its target."""
+    shutil.chown(path, user=name, group=name, follow_symlinks=False)
     for child in path.rglob("*"):
-        shutil.chown(child, user=name, group=name)
+        shutil.chown(child, user=name, group=name, follow_symlinks=False)
 
 
 def resolve_target_home() -> tuple[Path, str | None]:

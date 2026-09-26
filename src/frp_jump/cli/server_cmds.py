@@ -6,21 +6,48 @@ to the server box, is the entire admin surface (see docs/architecture.md)."""
 from __future__ import annotations
 
 import datetime
+import sys
 from pathlib import Path
 
 import typer
-import uvicorn
 from rich.console import Console
 from rich.table import Table
 
-from frp_jump.common.models import User
 from frp_jump.common.settings import Settings
 from frp_jump.driver.base import RelayState
-from frp_jump.driver.frp.binaries import ensure_installed
-from frp_jump.driver.frp.driver import FrpsRelayDriver, fetch_proxy_traffic
-from frp_jump.server import bootstrap, registry, service_install
-from frp_jump.server.app import create_app
-from frp_jump.server.db import Session, make_engine, make_session
+
+# `frp-jump-server`'s own [project.scripts] entry point exists in the same
+# base `frp-jump` package/wheel as `frp-jump-client` -- pip always creates
+# both console scripts regardless of which extras were requested, since
+# entry points aren't gated by extras. Only the imports below actually
+# need the `[server]` extra (fastapi/uvicorn/sqlmodel/cryptography); a
+# lean client-only `pip install frp-jump` still leaves this command on
+# PATH, just non-functional -- so failing here with one clear line beats
+# letting a bare `ModuleNotFoundError` traceback (naming some internal
+# dependency the user never asked to know about) be the first thing they
+# see.
+try:
+    import uvicorn
+
+    from frp_jump.common.models import User
+    from frp_jump.driver.frp.binaries import ensure_installed
+    from frp_jump.driver.frp.driver import FrpsRelayDriver, fetch_proxy_traffic
+    from frp_jump.server import bootstrap, registry, service_install
+    from frp_jump.server.app import create_app
+    from frp_jump.server.db import Session, make_engine, make_session
+except ModuleNotFoundError as exc:
+    print(
+        f"frp-jump-server needs extra dependencies that are not installed ({exc.name}).\n"
+        "\n"
+        "This command runs the control-plane API and relay (frps), which need "
+        "fastapi/uvicorn/sqlmodel/cryptography -- kept out of the base package "
+        "so a device-only `pip install frp-jump` (e.g. on a Wiren Board "
+        "controller) stays lean.\n"
+        "\n"
+        "Fix: pip install 'frp-jump[server]'",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 app = typer.Typer(help="Run and manage the frp-jump server (control-plane + relay).")
 console = Console()

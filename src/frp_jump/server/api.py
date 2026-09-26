@@ -158,7 +158,11 @@ def enroll(body: EnrollRequest, request: Request, db: Annotated[DbSession, Depen
 
 
 class EnrollChallengeRequest(BaseModel):
-    public_key: str
+    # Unauthenticated route -- cap well above any real SSH public key
+    # (a few hundred bytes even for RSA-4096 with a long comment) so an
+    # oversized body can't be used to inflate the cost of the
+    # ssh-keygen subprocess `fingerprint()`/`verify()` shell out to.
+    public_key: str = Field(max_length=8192)
 
 
 class EnrollChallengeResponse(BaseModel):
@@ -195,7 +199,10 @@ def enroll_challenge(
 
 class EnrollByKeyRequest(BaseModel):
     challenge_id: str
-    signature: str  # base64, over the challenge bytes, namespace ssh_signing.NAMESPACE
+    # base64, over the challenge bytes, namespace ssh_signing.NAMESPACE --
+    # unauthenticated route, capped for the same reason as
+    # EnrollChallengeRequest.public_key above.
+    signature: str = Field(max_length=8192)
     agent_version: str | None = None
     requested_name: str
 

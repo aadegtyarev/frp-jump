@@ -480,6 +480,17 @@ def list_pending_enroll_tokens(session: Session) -> list[PendingEnrollTokenView]
 # repeatedly hitting it isn't a free way to grow this table without bound.
 _MAX_PENDING_ENROLL_CHALLENGES_PER_FINGERPRINT = 5
 
+# A well-formed but unregistered-anywhere key, used purely so
+# `_verify_enroll_challenge` always pays the same `ssh-keygen -Y verify`
+# subprocess cost whether or not `fingerprint` is actually registered --
+# short-circuiting on "no such user" would reopen the exact timing oracle
+# that routing an unknown fingerprint through the same error path (rather
+# than a 404) was meant to close. No corresponding private key exists.
+_TIMING_DECOY_PUBLIC_KEY = (
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPmKG5ytdUef7VjL1pf/QVr0EfJh90zWCTbScGjWzgIg "
+    "frp-jump-timing-decoy"
+)
+
 
 def create_enroll_challenge(
     session: Session, *, fingerprint: str, ttl: datetime.timedelta
@@ -533,7 +544,13 @@ def _verify_enroll_challenge(
         challenge_bytes = base64.b64decode(record.challenge, validate=True)
     except (ValueError, binascii.Error) as exc:
         raise ValidationError("signature verification failed") from exc
-    if user is None or not ssh_signing.verify(user.ssh_public_key, challenge_bytes, signature):
+    # Always run verify(), even for an unregistered fingerprint (against
+    # a fixed decoy key that will never actually match) -- short-
+    # circuiting here would make the response time itself an oracle for
+    # whether a given fingerprint is registered, exactly what routing an
+    # unknown fingerprint through this same error path was meant to hide.
+    verify_key = user.ssh_public_key if user is not None else _TIMING_DECOY_PUBLIC_KEY
+    if not ssh_signing.verify(verify_key, challenge_bytes, signature) or user is None:
         raise ValidationError("signature verification failed")
     return record, user
 

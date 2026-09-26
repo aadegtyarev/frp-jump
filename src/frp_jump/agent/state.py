@@ -45,6 +45,12 @@ class AgentState:
     ca_cert_pem: str
     local_ports: dict[str, int] = field(default_factory=dict)
     profiles: dict[str, Profile] = field(default_factory=dict)
+    # Set via `set-p2p disabled` -- this device's own visitors skip xtcp
+    # hole-punching entirely and go straight to the stcp relay. Per-device
+    # (unlike `settings.xtcp_fallback_timeout_ms`, a global default) since
+    # whether p2p can work at all depends on this device's own network
+    # (NAT type, a VPN forcing all traffic through it, ...).
+    disable_p2p: bool = False
 
 
 def state_path(data_dir: Path) -> Path:

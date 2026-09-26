@@ -153,6 +153,22 @@ def test_apply_uses_configured_fallback_timeout(tmp_path) -> None:
     assert "fallbackTimeoutMs = 750" in config_text
 
 
+def test_apply_disable_p2p_omits_xtcp_visitor(tmp_path) -> None:
+    supervisor = FakeSupervisor()
+    driver = FrpDriver(
+        binary=Path("/opt/frp/frpc"),
+        state_dir=tmp_path,
+        fallback_timeout_ms=_FALLBACK_TIMEOUT_MS,
+        disable_p2p=True,
+        supervisor=supervisor,
+    )
+    consumed = (ConsumedGrant(grant_id="g1", secret="s", local_bind_port=2222),)
+    driver.apply(_desired(consumed=consumed))
+    config_text = (tmp_path / "frpc.toml").read_text()
+    assert "g1-xtcp-visitor" not in config_text
+    assert "fallbackTo" not in config_text
+
+
 def test_relay_driver_writes_tls_material_and_forces_tls(tmp_path) -> None:
     supervisor = FakeSupervisor()
     driver = _make_relay_driver(tmp_path, supervisor)

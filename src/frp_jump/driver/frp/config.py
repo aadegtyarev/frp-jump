@@ -74,8 +74,20 @@ def build_frpc_config(
     key_file: str,
     ca_file: str,
     fallback_timeout_ms: int,
+    disable_p2p: bool = False,
 ) -> dict:
-    """Build the frpc config dict for one device's desired state."""
+    """Build the frpc config dict for one device's desired state.
+
+    ``disable_p2p`` is this device's own consuming side opting out of
+    hole-punching entirely -- it never touches the *exposing* side (the
+    xtcp proxy above is still offered so other devices can still reach
+    this one peer-to-peer), only how this device's own visitors are
+    wired: a plain stcp visitor straight onto ``local_bind_port``, no
+    xtcp visitor/fallbackTo pair at all. Set via `set-p2p` when
+    hole-punching can't succeed on this network (e.g. all traffic is
+    forced through a VPN) and the retry/timeout churn that produces is
+    worse than just always using the relay.
+    """
     proxies: list[dict] = []
     for exposed in desired.exposed:
         proxies.append(
@@ -104,6 +116,19 @@ def build_frpc_config(
     visitors: list[dict] = []
     for consumed in desired.consumed:
         stcp_name = _stcp_visitor_name(consumed.grant_id)
+        if disable_p2p:
+            visitors.append(
+                {
+                    "name": stcp_name,
+                    "type": "stcp",
+                    "serverName": stcp_proxy_name(consumed.grant_id),
+                    "secretKey": consumed.secret,
+                    "bindAddr": "127.0.0.1",
+                    "bindPort": consumed.local_bind_port,
+                    **_encrypted(),
+                }
+            )
+            continue
         visitors.append(
             {
                 "name": stcp_name,

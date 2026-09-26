@@ -8,6 +8,7 @@ import logging
 import os
 import time
 from datetime import UTC, datetime
+from enum import StrEnum
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -114,16 +115,17 @@ def _settings_for_service_ops(*, user_service: bool, system_user: str | None = N
     return settings
 
 
-def _make_driver(settings: Settings) -> FrpDriver:
+def _make_driver(settings: Settings, *, disable_p2p: bool) -> FrpDriver:
     binaries = ensure_installed(settings.data_dir / "bin", version=settings.frp_version)
     return FrpDriver(
         binary=binaries.frpc,
         state_dir=settings.data_dir / "frpc",
         fallback_timeout_ms=settings.xtcp_fallback_timeout_ms,
+        disable_p2p=disable_p2p,
     )
 
 
-def _make_driver_with_retry(settings: Settings) -> FrpDriver:
+def _make_driver_with_retry(settings: Settings, *, disable_p2p: bool) -> FrpDriver:
     """Same as `_make_driver`, but a network hiccup while downloading the
     (first-run-only) frp binaries is not fatal -- print and back off/retry
     like `run_forever`'s own sync loop, instead of exiting and leaving a
@@ -134,7 +136,7 @@ def _make_driver_with_retry(settings: Settings) -> FrpDriver:
     backoff = poller.BACKOFF_INITIAL_SECONDS
     while True:
         try:
-            return _make_driver(settings)
+            return _make_driver(settings, disable_p2p=disable_p2p)
         except httpx.HTTPError as exc:
             console.print(
                 f"[yellow]could not download frp ({exc}) -- retrying in {backoff:.0f}s[/yellow]"
@@ -430,6 +432,48 @@ def set_key_cmd(
     console.print("[green]Key updated.[/green]")
 
 
+class _P2PSetting(StrEnum):
+    enabled = "enabled"
+    disabled = "disabled"
+
+
+@app.command("set-p2p")
+def set_p2p_cmd(
+    setting: _P2PSetting = typer.Argument(
+        ...,
+        help="'disabled' makes every connection this device consumes go "
+        "straight to the relay, skipping xtcp hole-punching entirely. "
+        "'enabled' (the default) restores the normal p2p-first, "
+        "relay-fallback behavior.",
+    ),
+) -> None:
+    """Turn peer-to-peer (xtcp) connections on or off for this device.
+
+    Only affects connections *this* device consumes (`connect`) -- other
+    devices can still reach you peer-to-peer regardless of this setting.
+    Worth disabling when hole-punching can't succeed on this network (a
+    restrictive NAT, or all traffic forced through a VPN) -- left enabled
+    in that situation, every new connection still waits out
+    `xtcp_fallback_timeout_ms` trying to punch before using the relay,
+    for nothing.
+
+    A running `frp-jump-client run` picks this up on its next poll cycle
+    (woken immediately, same as `connect`/`disconnect`).
+
+    Examples:
+
+        frp-jump-client set-p2p disabled
+
+        frp-jump-client set-p2p enabled
+    """
+    settings = Settings()
+    state = _require_state(settings)
+    state.disable_p2p = setting is _P2PSetting.disabled
+    save(settings.data_dir, state)
+    request_wake(settings.data_dir)
+    console.print(f"[green]p2p {setting.value}[/green] for {state.device_name}")
+
+
 @app.command("run")
 def run_cmd(
     agent_version: str = typer.Option(_AGENT_VERSION, help="Reported to the server on heartbeats."),
@@ -465,7 +509,7 @@ def run_cmd(
 
     settings = Settings()
     state = _require_state(settings)
-    driver = _make_driver_with_retry(settings)
+    driver = _make_driver_with_retry(settings, disable_p2p=state.disable_p2p)
     interval = poll_interval if poll_interval is not None else settings.agent_poll_interval_seconds
 
     console.print(

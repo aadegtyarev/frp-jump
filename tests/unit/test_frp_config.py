@@ -76,6 +76,43 @@ def test_frpc_config_wires_xtcp_visitor_fallback_to_stcp_visitor() -> None:
     assert xtcp_visitor["fallbackTimeoutMs"] == 750
 
 
+def test_frpc_config_disable_p2p_skips_xtcp_visitor_entirely() -> None:
+    desired = _desired(
+        consumed=(ConsumedGrant(grant_id="g2", secret="s2", local_bind_port=2222),)
+    )
+    config = build_frpc_config(
+        desired,
+        cert_file="c.crt",
+        key_file="c.key",
+        ca_file="ca.crt",
+        fallback_timeout_ms=500,
+        disable_p2p=True,
+    )
+
+    visitors = {v["name"]: v for v in config["visitors"]}
+    assert set(visitors) == {"g2-stcp-visitor"}
+    stcp_visitor = visitors["g2-stcp-visitor"]
+    assert stcp_visitor["type"] == "stcp"
+    assert stcp_visitor["serverName"] == "g2-stcp"
+    assert stcp_visitor["bindAddr"] == "127.0.0.1"
+    assert stcp_visitor["bindPort"] == 2222
+
+
+def test_frpc_config_disable_p2p_still_exposes_xtcp_proxy() -> None:
+    """Only this device's own *consuming* side opts out -- other devices
+    should still be able to reach it peer-to-peer."""
+    desired = _desired(exposed=(ExposedService(grant_id="g1", secret="s", local_port=22),))
+    config = build_frpc_config(
+        desired,
+        cert_file="c.crt",
+        key_file="c.key",
+        ca_file="ca.crt",
+        fallback_timeout_ms=500,
+        disable_p2p=True,
+    )
+    assert {p["name"] for p in config["proxies"]} == {"g1-xtcp", "g1-stcp"}
+
+
 def test_frps_config_forces_tls_and_sets_bind_port() -> None:
     relay = RelayState(bind_port=7000, ca_cert_pem=b"ca", cert_pem=b"cert", key_pem=b"key")
     config = build_frps_config(relay, cert_file="s.crt", key_file="s.key", ca_file="ca.crt")

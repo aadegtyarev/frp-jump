@@ -20,7 +20,7 @@ def test_defaults_apply_when_nothing_overrides_them(monkeypatch, tmp_path) -> No
     settings = Settings()
     assert settings.relay_bind_port == 7000
     assert settings.frp_version == "0.70.0"
-    assert settings.xtcp_fallback_timeout_ms == 1500
+    assert settings.xtcp_fallback_timeout_ms == 500
 
 
 def test_env_var_overrides_default(monkeypatch, tmp_path) -> None:

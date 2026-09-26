@@ -94,6 +94,17 @@ falls back to the stcp visitor while hole-punching keeps retrying in the
 background. See `tests/integration/test_frp_e2e.py` for this exercised
 end to end.
 
+`frp-jump-client set-p2p disabled` skips all of this on the consuming
+side: `build_frpc_config`'s `disable_p2p` collapses the pair above into a
+single stcp visitor bound directly to the consumer's local port (no
+xtcp visitor, no `fallbackTo`) -- for a device whose network can't
+punch through at all (e.g. everything routed through a VPN), so every
+new connection stops paying `fallbackTimeoutMs` to fail at something
+that was never going to work. It's a per-device choice, persisted in
+that device's own `state.json` (`disable_p2p`) -- it only changes what
+*this* device's own visitors do; other devices can still reach it
+peer-to-peer, since its exposing-side xtcp proxy above is unaffected.
+
 **The consumer picks its own local port**, not the server — the server
 doesn't know what's free on a given device, so `agent/poller.py` allocates
 one the first time it sees a new `grant_id` and persists it in

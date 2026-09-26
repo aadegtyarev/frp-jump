@@ -54,7 +54,14 @@ class Settings(BaseSettings):
     relay_public_addr: str | None = None
     relay_bind_port: int = 7000
     frps_admin_port: int = 7500
-    xtcp_fallback_timeout_ms: int = 1500
+    # How long a visitor waits for xtcp hole-punching before falling back
+    # to the stcp relay, per connection attempt. Kept short on purpose: a
+    # successful punch resolves in well under this time, so lowering it
+    # mostly just cuts how long a *failing* punch (bad NAT, VPN-routed
+    # traffic, ...) makes every new connection wait before using the relay
+    # anyway. If punching essentially never succeeds on a given device,
+    # `set-p2p disabled` skips the attempt (and this wait) entirely.
+    xtcp_fallback_timeout_ms: int = 500
 
     # agent
     # How often `client run` polls for desired-state changes. The side

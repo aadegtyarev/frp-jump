@@ -6,6 +6,25 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.13] - 2026-09-26
+
+### Added
+
+- **`frp-jump-client set-p2p enabled|disabled`** -- lets a device opt out
+  of xtcp hole-punching entirely for the connections it consumes, going
+  straight to the relay. For networks where p2p can never succeed (a
+  restrictive NAT, or all traffic forced through a VPN), this skips the
+  per-connection `fallbackTimeoutMs` wait that punching was always going
+  to lose anyway. Per-device, persisted in that device's own
+  `state.json` -- doesn't affect other devices reaching it peer-to-peer.
+
+### Changed
+
+- **`xtcp_fallback_timeout_ms` default lowered from 1500ms to 500ms** --
+  a successful punch resolves well under that; the old default mostly
+  meant a *failing* punch made every new connection wait 1.5s before
+  using the relay.
+
 ## [0.3.12] - 2026-09-26
 
 Found by an Opus code-review pass over this session's own diffs.

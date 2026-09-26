@@ -601,7 +601,7 @@ def test_doctor_reports_a_protocol_mismatch(tmp_path, monkeypatch):
 
 def test_run_uses_the_default_poll_interval_when_not_overridden(tmp_path, monkeypatch):
     _enrolled_state(tmp_path)
-    monkeypatch.setattr(client_cmds, "_make_driver_with_retry", lambda settings: object())
+    monkeypatch.setattr(client_cmds, "_make_driver_with_retry", lambda settings, **kwargs: object())
     captured = {}
     monkeypatch.setattr(
         client_cmds.poller,
@@ -617,7 +617,7 @@ def test_run_uses_the_default_poll_interval_when_not_overridden(tmp_path, monkey
 
 def test_run_poll_interval_overrides_the_default(tmp_path, monkeypatch):
     _enrolled_state(tmp_path)
-    monkeypatch.setattr(client_cmds, "_make_driver_with_retry", lambda settings: object())
+    monkeypatch.setattr(client_cmds, "_make_driver_with_retry", lambda settings, **kwargs: object())
     captured = {}
     monkeypatch.setattr(
         client_cmds.poller,
@@ -746,6 +746,25 @@ def test_devices_delete_prunes_profiles_pointing_at_the_deleted_device(tmp_path,
 
     assert result.exit_code == 0, result.output
     assert list(load(tmp_path).profiles) == ["other"]
+
+
+def test_set_p2p_disabled_persists_and_wakes_the_daemon(tmp_path):
+    _enrolled_state(tmp_path)
+
+    result = runner.invoke(client_cmds.app, ["set-p2p", "disabled"])
+
+    assert result.exit_code == 0, result.output
+    assert load(tmp_path).disable_p2p is True
+    assert (tmp_path / "wake").exists()
+
+
+def test_set_p2p_enabled_clears_a_previously_disabled_flag(tmp_path):
+    _enrolled_state(tmp_path, disable_p2p=True)
+
+    result = runner.invoke(client_cmds.app, ["set-p2p", "enabled"])
+
+    assert result.exit_code == 0, result.output
+    assert load(tmp_path).disable_p2p is False
 
 
 def test_version_flag_prints_the_installed_version_and_exits():

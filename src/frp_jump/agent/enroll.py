@@ -12,7 +12,7 @@ import httpx
 
 from frp_jump.agent.state import AgentState, save
 from frp_jump.common import ssh_signing
-from frp_jump.common.api import AGENT_API_PREFIX
+from frp_jump.common.api import AGENT_API_PREFIX, ControlURLValueError, require_https_url
 
 # Longer than agent/poller.py's routine per-request timeout: enroll also
 # does a CA-signing round trip server-side, and it's a one-off interactive
@@ -27,7 +27,10 @@ class EnrollError(RuntimeError):
 def enroll(
     *, control_url: str, token: str, data_dir: Path, requested_name: str | None = None
 ) -> AgentState:
-    control_url = control_url.rstrip("/")
+    try:
+        control_url = require_https_url(control_url)
+    except ControlURLValueError as exc:
+        raise EnrollError(str(exc)) from exc
     request_body = {"token": token, "requested_name": requested_name}
     try:
         resp = httpx.post(
@@ -62,7 +65,10 @@ def enroll_by_key(
     """Enroll using an already-registered SSH key instead of a one-time
     token: prove possession of the private key at ``identity_path`` by
     signing a server-issued challenge (see ``common/ssh_signing.py``)."""
-    control_url = control_url.rstrip("/")
+    try:
+        control_url = require_https_url(control_url)
+    except ControlURLValueError as exc:
+        raise EnrollError(str(exc)) from exc
     try:
         resp = httpx.post(
             f"{control_url}{AGENT_API_PREFIX}/enroll/challenge",

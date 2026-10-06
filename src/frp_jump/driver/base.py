@@ -62,6 +62,7 @@ class DesiredState:
     key_pem: bytes
     exposed: tuple[ExposedService, ...] = ()
     consumed: tuple[ConsumedGrant, ...] = ()
+    api_token: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +73,8 @@ class RelayState:
     ca_cert_pem: bytes
     cert_pem: bytes
     key_pem: bytes
+    policy_url: str | None = None
+    require_device_auth: bool = False
 
 
 @dataclass(frozen=True, slots=True)

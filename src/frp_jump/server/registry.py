@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import sqlalchemy.exc
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import update as sa_update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import aliased as _aliased
 from sqlmodel import Session, select
 
@@ -32,6 +33,7 @@ from frp_jump.common.models import (
     User,
 )
 from frp_jump.driver.base import ServiceProtocol
+from frp_jump.server import challenges
 
 # Device and service names end up in places that trust them structurally:
 # a device name becomes an x509 CN/SAN (common/pki.py), a service name
@@ -473,13 +475,6 @@ def list_pending_enroll_tokens(session: Session) -> list[PendingEnrollTokenView]
     ]
 
 
-# This endpoint is deliberately reachable by anyone with *any* public key
-# text, unauthenticated -- proving possession of a registered key is the
-# whole point of the flow, so there is no login to gate it behind. Cap
-# how many still-pending challenges one fingerprint can accumulate, so
-# repeatedly hitting it isn't a free way to grow this table without bound.
-_MAX_PENDING_ENROLL_CHALLENGES_PER_FINGERPRINT = 5
-
 # A well-formed but unregistered-anywhere key, used purely so
 # `_verify_enroll_challenge` always pays the same `ssh-keygen -Y verify`
 # subprocess cost whether or not `fingerprint` is actually registered --
@@ -503,35 +498,26 @@ def create_enroll_challenge(
     200-vs-404 split would itself be an oracle for which keys the server
     knows about, no matter how the error text reads (this used to raise
     ``NotFoundError`` here for that reason; it was still an oracle)."""
-    now = _now()
-    # Opportunistic cleanup: nothing else ever prunes this table, since
-    # nothing authenticates the caller here.
-    session.execute(sa_delete(EnrollChallenge).where(EnrollChallenge.expires_at < now))
-    pending = session.exec(
-        select(EnrollChallenge)
-        .where(EnrollChallenge.fingerprint == fingerprint, EnrollChallenge.used_at.is_(None))
-        .order_by(EnrollChallenge.created_at)
-    ).all()
-    if len(pending) >= _MAX_PENDING_ENROLL_CHALLENGES_PER_FINGERPRINT:
-        for stale in pending[: len(pending) - _MAX_PENDING_ENROLL_CHALLENGES_PER_FINGERPRINT + 1]:
-            session.delete(stale)
-    record = EnrollChallenge(
-        fingerprint=fingerprint,
-        challenge=base64.b64encode(secrets.token_bytes(32)).decode("ascii"),
-        expires_at=now + ttl,
-    )
-    session.add(record)
-    session.commit()
-    session.refresh(record)
-    return record
+    return challenges.issue(session, fingerprint, ttl)
 
 
 def _verify_enroll_challenge(
     session: Session, challenge_id: str, signature_b64: str
 ) -> tuple[EnrollChallenge, User]:
-    record = session.get(EnrollChallenge, challenge_id)
-    if record is None or record.used_at is not None or record.expires_at < _now():
-        raise NotFoundError("unknown, used, or expired challenge")
+    if challenge_id.startswith(challenges.PREFIX):
+        try:
+            record = challenges.read(session, challenge_id)
+        except ValueError as exc:
+            raise NotFoundError("unknown, used, or expired challenge") from exc
+    else:
+        # Honor challenges issued by the previous version until they expire.
+        record = session.get(EnrollChallenge, challenge_id)
+        if (
+            record is None
+            or record.used_at is not None
+            or record.expires_at.replace(tzinfo=datetime.UTC) < _now()
+        ):
+            raise NotFoundError("unknown, used, or expired challenge")
     # A missing user (the fingerprint was deleted after the challenge was
     # issued -- rare, but possible) fails the exact same way as a bad
     # signature: `create_enroll_challenge` already tries not to hand out a
@@ -583,16 +569,24 @@ def redeem_enroll_challenge(
         requested_name=requested_name,
     )
     try:
-        # Atomic conditional UPDATE, same rationale as redeem_enroll_token's
-        # -- and the same reason its autoflush must share this handler.
-        claimed = session.execute(
-            sa_update(EnrollChallenge)
-            .where(EnrollChallenge.id == record.id, EnrollChallenge.used_at.is_(None))
-            .values(used_at=_now())
-        )
+        if challenge_id.startswith(challenges.PREFIX):
+            # Insertion and device creation share one transaction. A unique
+            # replay key makes concurrent redemption fail atomically.
+            claimed = session.execute(
+                sqlite_insert(EnrollChallenge)
+                .values(**record.model_dump(exclude={"used_at"}), used_at=_now())
+                .on_conflict_do_nothing(index_elements=["id"])
+            )
+        else:
+            claimed = session.execute(
+                sa_update(EnrollChallenge)
+                .where(EnrollChallenge.id == record.id, EnrollChallenge.used_at.is_(None))
+                .values(used_at=_now())
+            )
         if claimed.rowcount == 0:
             session.rollback()
             raise NotFoundError("challenge already used")
+        session.execute(sa_delete(EnrollChallenge).where(EnrollChallenge.expires_at < _now()))
         session.commit()
     except sqlalchemy.exc.IntegrityError as exc:
         session.rollback()

@@ -56,6 +56,12 @@ same mechanism git uses for signed commits. The signature is namespaced to
 `frp-jump-enroll`, so it cannot be replayed in another context, and the private
 key never leaves the device that holds it.
 
+Enrollment challenges carry a server authentication code. Requesting more
+challenges cannot invalidate an existing one, and anonymous requests do not
+create pending database rows. Each challenge expires after its configured
+lifetime and can be redeemed once. The database stores successful redemptions
+to prevent replay, including across server restarts.
+
 **There is no web interface.** Administration is CLI commands over SSH to the
 server. Whoever can `sudo` on that box is an admin, which is the same boundary
 you already have for everything else running there.
@@ -110,21 +116,30 @@ frp-jump-server devices disable wb01 --user me   # anyone's
 - Every *mutating* API route starts rejecting its token. It cannot re-enable
   itself, rotate the owner's key, delete another device, or open a connection.
 
-**What it deliberately does not do:**
+**Relay enforcement:** with `relay_require_device_auth = true` (the default),
+frps also authenticates each login using the device token over mTLS. Disabled
+or deleted devices cannot log in again. Proxy registration is limited to
+existing, enabled grants and the exposing device. Visitor permissions are
+assigned by the server to the grant's consuming device, blocking anonymous
+visitor connections. New relayed connections check both devices' status.
+Heartbeats and new work connections also recheck the device. A client that
+stops sending accepted heartbeats loses its control session after 30 seconds.
 
-- It does not stop the device authenticating to the control plane. A disabled
-  device keeps polling, which is how it notices being re-enabled later.
-- It does not touch frps or the certificate. A device whose frpc is already
-  connected keeps that connection, and whatever it was last configured to relay,
-  until it reconnects or the relay restarts.
+Already established data streams are torn down by the cooperative peer agent
+on its next successful poll. The relay hooks do not forcibly close individual
+active data streams, and a direct P2P stream does not pass through the relay.
+Do not interpret a disable response as proof that every existing stream has
+already ended. Instant termination of all existing sessions is not provided.
 
-So `disable` is a *reversible* control-plane action with a delay bounded by the
-poll interval. It is not instant revocation.
-
-**Cutting a device off immediately** — a machine you believe is compromised
-right now — means rotating the CA, which re-enrolls everything. `delete` frees
-the name and removes the rows, but does not reach into a live frpc connection
-either.
+**Upgrading existing installations:** update clients first, keeping
+`FRP_JUMP_RELAY_REQUIRE_DEVICE_AUTH=false` on the server during migration.
+This still rejects arbitrary TCP/UDP/public proxies, unknown grants, wrong
+grant secrets, and new relayed connections involving disabled devices.
+However, legacy certificate-only logins are still accepted, so this mode is
+not full device revocation. After all clients, including offline devices,
+have been updated, set it to `true` and restart the server. Existing enrollment,
+local port assignments, SSH profiles and per-grant names are retained.
+Server or client restarts briefly interrupt the tunnels they run.
 
 ## Rotating your key
 
@@ -144,6 +159,13 @@ frp-jump-server users set-key alice new.pub
 
 ## Deployment rules the software enforces
 
+- Clients require `https://` for every control-plane request, including
+  enrollment and URLs saved by an older version. There is no client-side
+  HTTP override, including for loopback. If an existing device has an HTTP
+  `control_url`, configure a trusted HTTPS endpoint and update that field
+  in its `state.json` before upgrading the client. Keep the other identity
+  fields intact; re-enrollment is unnecessary. An HTTPS reverse proxy may
+  still forward to the server's local HTTP listener.
 - `frp-jump-server run` refuses to serve the control-plane API in cleartext on
   an address reachable from outside the machine. Certificates and bearer tokens
   cross that wire on every call. Override with `allow_insecure_bind` only when

@@ -44,6 +44,7 @@ The only setting with no usable default is `relay_public_addr`. Both
 | `relay_public_addr` | *none* | The address devices dial to reach your relay. A domain or a bare IP |
 | `relay_bind_port` | `7000` | The relay's own listening port. Must be reachable from the internet |
 | `frps_admin_port` | `7500` | The relay's local admin API. Loopback only |
+| `relay_require_device_auth` | `true` | Authenticate relay clients by device token; temporarily set `false` while upgrading older clients |
 | `api_host` | `0.0.0.0` | Where the control-plane API listens |
 | `api_port` | `8443` | The control-plane API's port |
 | `tls_cert_file` | *none* | Full-chain certificate, to serve HTTPS directly |

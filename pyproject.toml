@@ -1,6 +1,6 @@
 [project]
 name = "frp-jump"
-version = "0.3.14"
+version = "0.3.15"
 description = "P2P-with-relay-fallback ssh/tcp tunnels between Linux boxes, built on frp"
 readme = "README.md"
 license = "MIT"
@@ -64,6 +64,7 @@ extend-immutable-calls = ["typer.Argument", "typer.Option"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
     "integration: downloads/spins up real frp binaries and hits the network; excluded by default",
 ]

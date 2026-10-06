@@ -6,6 +6,31 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.15] - 2026-10-06
+
+### Security
+
+- Relay hooks now reject arbitrary proxy types and validate grants, encryption,
+  and grant secrets on the server. SSH, Jump and arbitrary TCP payloads inside
+  authorized tunnels keep the same names and local ports.
+- Strict relay authentication checks device tokens on login, heartbeat and work
+  connection creation, and restricts visitors to the grant's consumer. Existing
+  installations must update clients before enabling strict mode; set
+  `FRP_JUMP_RELAY_REQUIRE_DEVICE_AUTH=false` temporarily for migration.
+  New connections involving disabled/deleted devices are rejected. Existing
+  data streams still rely on peer polling for teardown; instant termination of
+  active P2P streams is not provided.
+
+- Enrollment challenges no longer evict older pending requests. New challenges
+  carry an HMAC authenticated token, with database replay records written only
+  after successful verification. Existing clients and unexpired challenges from
+  the previous version remain supported; signing keys persist across restarts.
+- Clients now require HTTPS for enrollment and every control-plane request,
+  including URLs in existing state files. HTTP has no override. Before upgrading
+  a client using HTTP, configure a trusted HTTPS endpoint and update its
+  `state.json` `control_url`; existing keys and enrollment can be retained.
+  TLS termination at a reverse proxy remains supported.
+
 ## [0.3.14] - 2026-09-26
 
 ### Fixed

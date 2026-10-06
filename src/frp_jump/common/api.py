@@ -27,3 +27,39 @@ AGENT_API_PREFIX = "/api/agent"
 #: already running, and the daemon keeps polling/retrying rather than
 #: exiting -- one side updates lands them back in sync on its own.
 PROTOCOL_VERSION = 1
+
+
+class ControlURLValueError(ValueError):
+    """The control-plane URL cannot safely carry device credentials."""
+
+
+def require_https_url(value: str) -> str:
+    """Validate before any request, including requests using persisted state.
+
+    Keep paths (reverse-proxy prefixes) and explicit ports intact. Never
+    silently upgrade HTTP: the same port may serve a different service.
+    """
+    from urllib.parse import urlsplit
+
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise ControlURLValueError("invalid control-plane URL") from exc
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value)
+        or "\\" in value
+        or port == 0
+    ):
+        raise ControlURLValueError(
+            "control-plane URL must use https:// with a valid host and no "
+            "credentials, query or fragment; configure HTTPS on the server "
+            "and update the saved control_url if this device is already enrolled"
+        )
+    return value.rstrip("/")

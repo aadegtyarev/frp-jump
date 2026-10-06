@@ -32,10 +32,11 @@ so a disabled device's still-valid token can't be used to re-enable
 itself or otherwise act on the owner's account. Re-enabling it (from
 another of the owner's still-enabled devices, or the admin CLI) lets it
 reconnect. Deleting a device or grant is the only irreversible operation.
-None of this is enforced by frps/mTLS directly -- a device whose frpc is
-already connected keeps that connection (and whatever it was last
-configured to relay) until it
-reconnects or the relay restarts. Hard revocation means rotating the CA.
+The relay policy also checks enabled devices and grants. Strict relay mode
+requires each client's device token at login, binds visitor permissions to the
+consumer, and checks heartbeats/work connections. Legacy migration mode cannot
+fully revoke certificate-only logins. Active streams rely on cooperative peer
+polling for teardown; instant P2P termination is not possible at the relay.
 See docs/security.md.
 """
 
@@ -56,6 +57,7 @@ __all__ = [
     "Grant",
     "KeyRotationChallenge",
     "Service",
+    "ServerSecret",
     "User",
 ]
 
@@ -75,10 +77,11 @@ class User(SQLModel, table=True):
 
 
 class EnrollChallenge(SQLModel, table=True):
-    """A short-lived nonce issued to prove possession of a registered
-    ``User.ssh_public_key`` before a device may enroll by key -- see
-    ``common/ssh_signing.py`` and ``registry.create_enroll_challenge`` /
-    ``redeem_enroll_challenge``."""
+    """Replay records for redeemed challenges, plus pending legacy nonces.
+
+    Newly issued challenges are authenticated tokens, persisted here only
+    when redeemed. Legacy pending rows remain usable until they expire.
+    """
 
     __tablename__ = "enroll_challenges"
 
@@ -88,6 +91,15 @@ class EnrollChallenge(SQLModel, table=True):
     created_at: datetime.datetime = Field(default_factory=_now)
     expires_at: datetime.datetime
     used_at: datetime.datetime | None = None
+
+
+class ServerSecret(SQLModel, table=True):
+    """Persistent signing keys; protected by the server data directory."""
+
+    __tablename__ = "server_secrets"
+
+    name: str = Field(primary_key=True)
+    value: str
 
 
 class KeyRotationChallenge(SQLModel, table=True):

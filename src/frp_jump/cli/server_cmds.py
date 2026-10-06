@@ -36,6 +36,7 @@ try:
     from frp_jump.server import bootstrap, registry, service_install
     from frp_jump.server.app import create_app
     from frp_jump.server.db import Session, make_engine, make_session
+    from frp_jump.server.relay_policy import RelayPolicyServer
 except ModuleNotFoundError as exc:
     print(
         f"frp-jump-server needs extra dependencies that are not installed ({exc.name}).\n"
@@ -205,16 +206,6 @@ def run() -> None:
         state_dir=settings.data_dir / "relay",
         admin_port=settings.frps_admin_port,
     )
-    relay.apply(
-        RelayState(
-            bind_port=settings.relay_bind_port,
-            ca_cert_pem=ca.cert_pem,
-            cert_pem=relay_cert.cert_pem,
-            key_pem=relay_cert.key_pem,
-        )
-    )
-    console.print(f"[green]relay listening[/green] on 0.0.0.0:{settings.relay_bind_port}")
-
     engine = make_engine(bootstrap.db_path(settings))
     web_app = create_app(settings=settings, engine=engine, ca=ca)
 
@@ -253,18 +244,32 @@ def run() -> None:
         )
         raise typer.Exit(1)
 
-    try:
-        # Every enrolled device polls every agent_poll_interval_seconds
-        # (default 2s) -- uvicorn's default per-request access log would
-        # log a heartbeat and a desired-state fetch that often, for every
-        # device, forever. Genuine errors (5xx, connection issues) still
-        # surface through uvicorn's own error logger, which this doesn't
-        # touch.
-        uvicorn.run(
-            web_app, host=settings.api_host, port=settings.api_port, access_log=False, **ssl_kwargs
-        )
-    finally:
-        relay.stop()
+    with RelayPolicyServer(
+        engine, require_device_auth=settings.relay_require_device_auth
+    ) as policy:
+        relay.apply(RelayState(
+            bind_port=settings.relay_bind_port,
+            ca_cert_pem=ca.cert_pem,
+            cert_pem=relay_cert.cert_pem,
+            key_pem=relay_cert.key_pem,
+            policy_url=policy.url,
+            require_device_auth=settings.relay_require_device_auth,
+        ))
+        if not settings.relay_require_device_auth:
+            console.print("[yellow]relay migration mode: legacy clients still accepted[/yellow]")
+        try:
+            # Every enrolled device polls every agent_poll_interval_seconds
+            # (default 2s) -- uvicorn's default per-request access log would
+            # log a heartbeat and a desired-state fetch that often, for every
+            # device, forever. Genuine errors (5xx, connection issues) still
+            # surface through uvicorn's own error logger, which this doesn't
+            # touch.
+            uvicorn.run(
+                web_app, host=settings.api_host, port=settings.api_port,
+                access_log=False, **ssl_kwargs
+            )
+        finally:
+            relay.stop()
 
 
 @app.command("install-service")

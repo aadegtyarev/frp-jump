@@ -66,8 +66,10 @@ route rejects the token via the `get_enabled_device` dependency. A disabled
 device's still-valid token cannot re-enable itself, rotate the owner's key,
 delete a sibling device, or open a connection.
 
-None of this reaches frps or mTLS. Hard, immediate revocation means rotating the
-CA. This is stated for users in [Security model](security.md#turning-a-device-off).
+Relay hooks also reject disabled devices and invalid grants. Strict mode binds
+relay logins to device API tokens and restricts visitors to the grantee. Existing
+data streams still require peer polling for teardown; active P2P streams cannot
+be forcibly cut by the relay. See [Security model](security.md#turning-a-device-off).
 
 ### Device names are unique per owner
 
@@ -96,18 +98,19 @@ to the exposing device's name for a grant created some other way.
 
 ### Challenge redemption is an atomic conditional update
 
-Both `EnrollToken` and `EnrollChallenge` are consumed with
-`UPDATE ... WHERE used_at IS NULL`, not read-then-write. Two concurrent
-redemptions could otherwise both pass validation and each create a device before
-either committed.
+Enroll tokens and legacy persisted challenges are consumed with
+`UPDATE ... WHERE used_at IS NULL`. New signed challenges use an atomic unique
+replay-record insertion in the same transaction as device creation. Two
+concurrent redemptions cannot both create a device.
 
 ### The enroll challenge endpoint is deliberately uninformative
 
 `POST /api/agent/enroll/challenge` returns a nonce whether or not the fingerprint is
 registered. An unknown key fails at the redeem step, exactly like a bad
 signature. A 200-vs-404 split would be an oracle for which keys the server
-knows. Outstanding challenges per fingerprint are capped, and expired ones are
-purged opportunistically, since the route is unauthenticated by design.
+knows. New challenges are stateless HMAC tokens signed with a persistent server key.
+Only successful redemption writes a replay record, so flooding this public
+endpoint cannot evict another client's pending challenge.
 
 ### Client account selection is continuity-first
 

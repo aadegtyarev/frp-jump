@@ -167,6 +167,13 @@ def build_frpc_config(
         # and `status` shows the current state on demand.
         "log": {"level": "warn"},
     }
+    if desired.api_token:
+        config["metadatas"] = {
+            "frp_jump_device": desired.device_id,
+            "frp_jump_token": desired.api_token,
+        }
+        config["transport"]["heartbeatInterval"] = 5
+        config["transport"]["heartbeatTimeout"] = 30
     if proxies:
         config["proxies"] = proxies
     if visitors:
@@ -184,11 +191,27 @@ def build_frps_config(
     """Build the frps config dict for the relay."""
     tls = _tls_block(cert_file=cert_file, key_file=key_file, ca_file=ca_file)
     tls["force"] = True
-    return {
+    config = {
         "bindPort": desired.bind_port,
         "transport": {"tls": tls},
         "log": {"level": "warn"},
     }
+
+    if desired.policy_url:
+        from urllib.parse import urlsplit
+
+        endpoint = urlsplit(desired.policy_url)
+        config["httpPlugins"] = [{
+            "name": "frp-jump-policy",
+            "addr": f"{endpoint.scheme}://{endpoint.netloc}",
+            "path": endpoint.path,
+            "ops": ["Login", "NewProxy", "Ping", "NewWorkConn", "NewUserConn"],
+        }]
+    if desired.require_device_auth:
+        if not desired.policy_url:
+            raise ValueError("device authentication requires a relay policy listener")
+        config["transport"]["heartbeatTimeout"] = 30
+    return config
 
 
 def write_toml(config: dict, path: Path) -> None:

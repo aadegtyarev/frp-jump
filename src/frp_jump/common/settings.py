@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     relay_public_addr: str | None = None
     relay_bind_port: int = 7000
     frps_admin_port: int = 7500
+    # Set False only during a staged upgrade while legacy clients remain.
+    # Proxy type/grant validation remains enabled in either mode.
+    relay_require_device_auth: bool = True
     # How long a visitor waits for xtcp hole-punching before falling back
     # to the stcp relay, per connection attempt. Kept short on purpose: a
     # successful punch resolves in well under this time, so lowering it

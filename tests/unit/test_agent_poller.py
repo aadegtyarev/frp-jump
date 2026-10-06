@@ -16,7 +16,7 @@ def _state(**overrides) -> AgentState:
     base = dict(
         device_id="dev-1",
         device_name="wb01",
-        control_url="http://ctl.example.com",
+        control_url="https://ctl.example.com",
         relay_addr="relay.example.com",
         relay_port=7000,
         api_token="tok",
@@ -56,7 +56,7 @@ def test_send_heartbeat_posts_to_control_url_with_bearer_auth(monkeypatch) -> No
     monkeypatch.setattr(poller.httpx, "post", fake_post)
     poller.send_heartbeat(state, agent_version="1.0")
 
-    assert captured["url"] == "http://ctl.example.com/api/agent/heartbeat"
+    assert captured["url"] == "https://ctl.example.com/api/agent/heartbeat"
     assert captured["headers"]["Authorization"] == "Bearer tok"
     assert captured["json"] == {"agent_version": "1.0"}
 
@@ -135,7 +135,7 @@ def test_fetch_server_version_returns_parsed_json(monkeypatch) -> None:
     payload = {"protocol_version": 1, "package_version": "0.3.3"}
 
     def fake_get(url, *, timeout):
-        assert url == "http://ctl.example.com/api/agent/version"
+        assert url == "https://ctl.example.com/api/agent/version"
         return httpx.Response(200, json=payload, request=httpx.Request("GET", url))
 
     monkeypatch.setattr(poller.httpx, "get", fake_get)
@@ -550,7 +550,7 @@ def test_add_device_posts_and_returns_the_issued_token(monkeypatch) -> None:
     monkeypatch.setattr(poller.httpx, "post", fake_post)
     result = poller.add_device(state, device_name_hint="laptop")
 
-    assert captured["url"] == "http://ctl.example.com/api/agent/devices/enroll-tokens"
+    assert captured["url"] == "https://ctl.example.com/api/agent/devices/enroll-tokens"
     assert captured["json"] == {"device_name_hint": "laptop"}
     assert result["token"] == "tok"
 
@@ -571,7 +571,7 @@ def test_list_devices_returns_parsed_json(monkeypatch) -> None:
     payload = [{"name": "wb01", "enrolled_at": "x", "last_seen_at": None, "enabled": True}]
 
     def fake_get(url, *, headers, timeout):
-        assert url == "http://ctl.example.com/api/agent/devices"
+        assert url == "https://ctl.example.com/api/agent/devices"
         return httpx.Response(200, json=payload, request=httpx.Request("GET", url))
 
     monkeypatch.setattr(poller.httpx, "get", fake_get)
@@ -588,7 +588,7 @@ def test_delete_device_posts_to_the_named_device(monkeypatch) -> None:
 
     monkeypatch.setattr(poller.httpx, "post", fake_post)
     poller.delete_device(state, "laptop")
-    assert captured["url"] == "http://ctl.example.com/api/agent/devices/laptop/delete"
+    assert captured["url"] == "https://ctl.example.com/api/agent/devices/laptop/delete"
 
 
 def test_delete_device_raises_sync_error_on_failure(monkeypatch) -> None:
@@ -626,7 +626,7 @@ def test_connect_posts_device_port_and_protocol(monkeypatch) -> None:
         state, device_name="wb01", target_port=22, protocol=ServiceProtocol.SSH
     )
 
-    assert captured["url"] == "http://ctl.example.com/api/agent/connect"
+    assert captured["url"] == "https://ctl.example.com/api/agent/connect"
     assert captured["json"] == {"device_name": "wb01", "target_port": 22, "protocol": "ssh"}
     assert result["grant_id"] == "g1"
 
@@ -655,7 +655,7 @@ def test_disconnect_posts_device_and_port(monkeypatch) -> None:
     monkeypatch.setattr(poller.httpx, "post", fake_post)
     poller.disconnect(state, device_name="wb01", target_port=22)
 
-    assert captured["url"] == "http://ctl.example.com/api/agent/disconnect"
+    assert captured["url"] == "https://ctl.example.com/api/agent/disconnect"
     assert captured["json"] == {
         "device_name": "wb01",
         "target_port": 22,
@@ -742,7 +742,7 @@ def test_delete_device_url_encodes_the_device_name(monkeypatch) -> None:
     poller.delete_device(state, "../../etc/passwd")
 
     assert "../" not in captured["url"]
-    assert captured["url"].startswith("http://ctl.example.com/api/agent/devices/")
+    assert captured["url"].startswith("https://ctl.example.com/api/agent/devices/")
 
 
 def test_disconnect_raises_not_connected_error_on_404(monkeypatch) -> None:
@@ -912,7 +912,7 @@ def test_disable_device_posts_to_the_disable_endpoint(monkeypatch) -> None:
 
     monkeypatch.setattr(poller.httpx, "post", fake_post)
     poller.disable_device(state, "laptop")
-    assert captured["url"] == "http://ctl.example.com/api/agent/devices/laptop/disable"
+    assert captured["url"] == "https://ctl.example.com/api/agent/devices/laptop/disable"
 
 
 def test_enable_device_posts_to_the_enable_endpoint(monkeypatch) -> None:
@@ -925,7 +925,7 @@ def test_enable_device_posts_to_the_enable_endpoint(monkeypatch) -> None:
 
     monkeypatch.setattr(poller.httpx, "post", fake_post)
     poller.enable_device(state, "laptop")
-    assert captured["url"] == "http://ctl.example.com/api/agent/devices/laptop/enable"
+    assert captured["url"] == "https://ctl.example.com/api/agent/devices/laptop/enable"
 
 
 def test_disable_device_raises_sync_error_on_failure(monkeypatch) -> None:
@@ -976,9 +976,9 @@ def test_set_key_signs_the_challenge_with_both_keys_and_posts_both_signatures(
     monkeypatch.setattr(poller.httpx, "post", fake_post)
     poller.set_key(state, key_path, public_key, current_identity_path=current_key_path)
 
-    assert calls[0][0] == "http://ctl.example.com/api/agent/users/set-key/challenge"
+    assert calls[0][0] == "https://ctl.example.com/api/agent/users/set-key/challenge"
     assert calls[0][1] == {"public_key": public_key}
-    assert calls[1][0] == "http://ctl.example.com/api/agent/users/set-key"
+    assert calls[1][0] == "https://ctl.example.com/api/agent/users/set-key"
     assert calls[1][1]["challenge_id"] == "chal-1"
     assert "signature" in calls[1][1]
     assert "current_signature" in calls[1][1]

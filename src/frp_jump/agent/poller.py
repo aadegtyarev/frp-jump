@@ -16,7 +16,12 @@ import httpx
 from frp_jump.agent import hosts
 from frp_jump.agent.state import AgentState, load, save, wake_path
 from frp_jump.common import ssh_signing
-from frp_jump.common.api import AGENT_API_PREFIX, PROTOCOL_VERSION
+from frp_jump.common.api import (
+    AGENT_API_PREFIX,
+    PROTOCOL_VERSION,
+    ControlURLValueError,
+    require_https_url,
+)
 from frp_jump.driver.base import (
     ConsumedGrant,
     DesiredState,
@@ -109,6 +114,13 @@ def _allocate_local_port(port_range: range, taken: set[int]) -> int:
     raise SyncError(f"no free local port in range {port_range.start}-{port_range.stop - 1}")
 
 
+def _control_url(state: AgentState) -> str:
+    try:
+        return require_https_url(state.control_url)
+    except ControlURLValueError as exc:
+        raise SyncError(str(exc)) from exc
+
+
 def _auth_headers(state: AgentState) -> dict[str, str]:
     return {"Authorization": f"Bearer {state.api_token}"}
 
@@ -116,7 +128,7 @@ def _auth_headers(state: AgentState) -> dict[str, str]:
 def fetch_desired_state(state: AgentState, *, timeout: float = _HTTP_TIMEOUT_SECONDS) -> dict:
     try:
         resp = httpx.get(
-            f"{state.control_url}{AGENT_API_PREFIX}/desired-state",
+            f"{_control_url(state)}{AGENT_API_PREFIX}/desired-state",
             headers=_auth_headers(state),
             timeout=timeout,
         )
@@ -153,7 +165,7 @@ def fetch_server_version(
     unauthenticated, standalone way to ask "what does the server think it
     speaks" without needing to be enrolled at all."""
     try:
-        resp = httpx.get(f"{state.control_url}{AGENT_API_PREFIX}/version", timeout=timeout)
+        resp = httpx.get(f"{_control_url(state)}{AGENT_API_PREFIX}/version", timeout=timeout)
     except httpx.HTTPError as exc:
         raise SyncError(f"could not reach {state.control_url}: {exc}") from exc
     if resp.status_code != 200:
@@ -166,7 +178,7 @@ def send_heartbeat(
 ) -> None:
     try:
         resp = httpx.post(
-            f"{state.control_url}{AGENT_API_PREFIX}/heartbeat",
+            f"{_control_url(state)}{AGENT_API_PREFIX}/heartbeat",
             json={"agent_version": agent_version},
             headers=_auth_headers(state),
             timeout=timeout,
@@ -188,7 +200,7 @@ def add_device(
     ``device_name_hint``, ``expires_at``)."""
     try:
         resp = httpx.post(
-            f"{state.control_url}{AGENT_API_PREFIX}/devices/enroll-tokens",
+            f"{_control_url(state)}{AGENT_API_PREFIX}/devices/enroll-tokens",
             json={"device_name_hint": device_name_hint},
             headers=_auth_headers(state),
             timeout=timeout,
@@ -204,7 +216,7 @@ def list_devices(state: AgentState, *, timeout: float = _HTTP_TIMEOUT_SECONDS) -
     """`client devices list`: every device owned by the same person as this one."""
     try:
         resp = httpx.get(
-            f"{state.control_url}{AGENT_API_PREFIX}/devices",
+            f"{_control_url(state)}{AGENT_API_PREFIX}/devices",
             headers=_auth_headers(state),
             timeout=timeout,
         )
@@ -221,7 +233,7 @@ def delete_device(
     """`client devices delete`: permanently remove one of your own devices."""
     try:
         resp = httpx.post(
-            f"{state.control_url}{AGENT_API_PREFIX}/devices/{quote(device_name, safe='')}/delete",
+            f"{_control_url(state)}{AGENT_API_PREFIX}/devices/{quote(device_name, safe='')}/delete",
             headers=_auth_headers(state),
             timeout=timeout,
         )
@@ -237,7 +249,7 @@ def _set_device_enabled(
     action = "enable" if enabled else "disable"
     try:
         resp = httpx.post(
-            f"{state.control_url}{AGENT_API_PREFIX}/devices/"
+            f"{_control_url(state)}{AGENT_API_PREFIX}/devices/"
             f"{quote(device_name, safe='')}/{action}",
             headers=_auth_headers(state),
             timeout=timeout,
@@ -280,7 +292,7 @@ def set_key(
     locked out by whoever compromised just this one."""
     try:
         resp = httpx.post(
-            f"{state.control_url}{AGENT_API_PREFIX}/users/set-key/challenge",
+            f"{_control_url(state)}{AGENT_API_PREFIX}/users/set-key/challenge",
             json={"public_key": public_key},
             headers=_auth_headers(state),
             timeout=timeout,
@@ -305,7 +317,7 @@ def set_key(
 
     try:
         resp = httpx.post(
-            f"{state.control_url}{AGENT_API_PREFIX}/users/set-key",
+            f"{_control_url(state)}{AGENT_API_PREFIX}/users/set-key",
             json={
                 "challenge_id": challenge["challenge_id"],
                 "signature": base64.b64encode(signature).decode("ascii"),
@@ -333,7 +345,7 @@ def connect(
     ``exposer_device_name``, ``target_port``, ``protocol``)."""
     try:
         resp = httpx.post(
-            f"{state.control_url}{AGENT_API_PREFIX}/connect",
+            f"{_control_url(state)}{AGENT_API_PREFIX}/connect",
             json={
                 "device_name": device_name,
                 "target_port": target_port,
@@ -362,7 +374,7 @@ def disconnect(
     owned by the same person -- see `--from` in `client_cmds.disconnect`."""
     try:
         resp = httpx.post(
-            f"{state.control_url}{AGENT_API_PREFIX}/disconnect",
+            f"{_control_url(state)}{AGENT_API_PREFIX}/disconnect",
             json={
                 "device_name": device_name,
                 "target_port": target_port,
@@ -440,6 +452,7 @@ def build_desired_state(
         key_pem=state.key_pem.encode(),
         exposed=exposed,
         consumed=tuple(consumed),
+        api_token=state.api_token,
     )
 
 

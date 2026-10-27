@@ -8,6 +8,7 @@ path).
 
 from __future__ import annotations
 
+import grp
 import os
 import pwd
 import shutil
@@ -126,9 +127,13 @@ def chown_tree(path: Path, name: str) -> None:
     *rerun* of this (as root, e.g. a later ``install-service``) to chown
     some arbitrary path to that account -- only the link itself is
     reowned, never its target."""
-    shutil.chown(path, user=name, group=name, follow_symlinks=False)
+    # shutil.chown only gained follow_symlinks in Python 3.13; the bundled
+    # client runtime is Python 3.12. Resolve the named group independently.
+    uid = pwd.getpwnam(name).pw_uid
+    gid = grp.getgrnam(name).gr_gid
+    os.chown(path, uid, gid, follow_symlinks=False)
     for child in path.rglob("*"):
-        shutil.chown(child, user=name, group=name, follow_symlinks=False)
+        os.chown(child, uid, gid, follow_symlinks=False)
 
 
 #: Auto-created (not opt-in) when `install`/`enroll` run as root with

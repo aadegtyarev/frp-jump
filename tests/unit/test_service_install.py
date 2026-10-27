@@ -294,3 +294,65 @@ def test_install_system_user_respects_data_dir_override(tmp_path, monkeypatch):
     unit_path = service_install.install(system_user="frp-jump-client")
 
     assert "Environment=FRP_JUMP_DATA_DIR=" not in unit_path.read_text()
+
+
+def test_chown_tree_preserves_no_follow_on_python_312(tmp_path, monkeypatch):
+    import grp
+
+    root = tmp_path / "state"
+    root.mkdir()
+    child = root / "state.json"
+    child.write_text("{}")
+    nested = root / "nested"
+    nested.mkdir()
+    leaf = nested / "config"
+    leaf.write_text("synthetic")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "untouched").write_text("synthetic")
+    link = root / "link"
+    link.symlink_to(outside, target_is_directory=True)
+    dangling = root / "dangling"
+    dangling.symlink_to(tmp_path / "missing")
+    monkeypatch.setattr(
+        pwd, "getpwnam", lambda name: pwd.struct_passwd((name, "x", 1234, 5678, "", "", ""))
+    )
+    monkeypatch.setattr(grp, "getgrnam", lambda name: grp.struct_group((name, "x", 4321, [])))
+    calls = []
+    monkeypatch.setattr(
+        service_install.os, "chown",
+        lambda path, uid, gid, *, follow_symlinks: calls.append((path, uid, gid, follow_symlinks)),
+    )
+
+    service_install.chown_tree(root, "synthetic-user")
+
+    assert {call[0] for call in calls} == {root, child, nested, leaf, link, dangling}
+    assert len(calls) == 6
+    assert all(call[1:] == (1234, 4321, False) for call in calls)
+
+
+def test_fresh_root_target_prepares_system_state_on_python_312(tmp_path, monkeypatch):
+    import grp
+
+    monkeypatch.setattr(service_install.os, "geteuid", lambda: 0)
+    monkeypatch.delenv("SUDO_USER", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setattr(service_install, "_VAR_LIB_DIR", tmp_path / "var-lib")
+    monkeypatch.setattr(service_install, "_world_traversable", lambda path: True)
+    monkeypatch.setattr(
+        pwd, "getpwnam", lambda name: pwd.struct_passwd((name, "x", 1234, 5678, "", "", ""))
+    )
+    monkeypatch.setattr(grp, "getgrnam", lambda name: grp.struct_group((name, "x", 4321, [])))
+    calls = []
+    monkeypatch.setattr(
+        service_install.os, "chown",
+        lambda path, uid, gid, *, follow_symlinks: calls.append((path, uid, gid, follow_symlinks)),
+    )
+
+    data_dir, run_as_user = service_install.resolve_default_target("/synthetic/client")
+
+    assert run_as_user == "frp-jump-client"
+    assert data_dir == tmp_path / "var-lib" / run_as_user
+    assert data_dir.is_dir()
+    assert data_dir.stat().st_mode & 0o777 == 0o750
+    assert calls == [(data_dir, 1234, 4321, False)]

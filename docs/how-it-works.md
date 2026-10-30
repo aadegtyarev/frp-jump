@@ -43,8 +43,9 @@ configures frpc. It only accepts connections presenting a certificate from that
 CA.
 
 **The agent** runs on every device. It asks the control plane what this device
-should be doing, rewrites frpc's config to match, restarts frpc when the config
-changed, and keeps the managed part of `~/.ssh/config` in sync.
+should be doing, rewrites frpc's config to match, hot-reloads frpc when the
+config changed, and keeps the managed part of `~/.ssh/config` in sync. A new or
+removed connection does not interrupt the device's other connections.
 
 Administration is `frp-jump-server` commands over SSH to the box. There is no
 web interface of any kind — SSH access to the server *is* the admin boundary,
@@ -111,7 +112,7 @@ sequenceDiagram
     par wb01's next poll
         W->>S: GET /api/agent/desired-state
         S-->>W: expose port 22, secret X
-        W->>W: rewrite frpc.toml, restart frpc
+        W->>W: rewrite frpc.toml, reload frpc
     and laptop's next poll
         L->>S: GET /api/agent/desired-state
         S-->>L: consume wb01:22, secret X
@@ -223,14 +224,26 @@ flowchart TD
     cmp -->|no| sleep["sleep"]
     cmp -->|yes| ports["allocate local ports<br/>for new connections"]
     ports --> render["render frpc.toml"]
-    render --> restart["restart frpc"]
-    restart --> sshcfg["refresh ~/.ssh/config"]
+    render --> what{"only connections<br/>changed?"}
+    what -->|yes| reload["reload frpc"]
+    what -->|"no, or reload failed"| restart["restart frpc"]
+    reload --> sshcfg["refresh ~/.ssh/config"]
+    restart --> sshcfg
     sshcfg --> sleep
     sleep --> start
 
     hb -.->|"network error"| backoff["back off:<br/>5s → 90s"]
     backoff -.-> start
 ```
+
+A reload goes through frpc's own admin API. frpc compares each connection's
+config by name and touches only the ones that were added, removed or changed, so
+an ssh session through one connection survives someone opening a second one to
+the same device. Anything else in the config — the relay address, the
+certificate, the device token — is fixed when frpc starts, so a change there
+restarts frpc and briefly drops every connection on the device. So does a
+reload that fails. [Security model](security.md#the-local-frpc-admin-api)
+explains how that admin API is locked down.
 
 A failed cycle retries sooner than a healthy one, then backs off exponentially,
 so an outage doesn't turn into a thundering herd when the server comes back.

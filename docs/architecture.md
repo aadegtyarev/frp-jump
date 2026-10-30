@@ -142,7 +142,9 @@ Each of these cost someone an afternoon once.
 | `sqlite:///:memory:` needs `poolclass=StaticPool` | FastAPI's `TestClient` runs handlers in a threadpool. Without it, each connection gets its own empty database and every query 500s with "no such table". See `server/db.py` |
 | A bare-IP `serverAddr` needs an `iPAddress` SAN | Go's TLS client will not match a `dNSName` entry against an IP host. `common/pki._san_entries` picks the right type per entry |
 | Device certs get `CLIENT_AUTH` only | Only `bootstrap.load_or_create_relay_cert` passes `server_auth=True`. A device cert that could also present as the relay would let an on-path device impersonate it |
-| Only the server-side driver enables an admin API | `FrpDriver` never turns on frpc's `webServer`. `FrpsRelayDriver` needs a distinct `admin_port` per instance, which is why it has no default |
+| frpc's admin API must never run without its random credentials | `FrpDriver` turns on frpc's `webServer` only to hot-reload, on a random loopback port with a random `user` and `password` per frpc start. Every other device of the owner can reach that port through a grant, and the API can rewrite frpc.toml. frp skips auth when both are empty. See the docstring at the top of `driver/frp/driver.py` |
+| A reload applies only proxies and visitors | frpc keeps the common config (server, TLS, metadatas, transport, log, webServer) from process start. `config.needs_restart` decides; a change it misses would be silently ignored by the running frpc |
+| `FrpsRelayDriver` needs a distinct `admin_port` per instance | That is why it has no default |
 | A pending enroll token blocks a second one for the same name | Check unused, unexpired tokens as well as existing `Device` rows, or the second redemption dies with a raw integrity error. Covered by `test_create_enroll_token_rejects_duplicate_name_while_unredeemed_token_exists` |
 | The API hides what it is | `server/app.py` serves a placeholder at `/` and disables `/docs`, `/redoc`, `/openapi.json`. A relay box is internet-reachable by construction |
 

@@ -50,3 +50,12 @@ def test_write_private_key_overwrites_existing_file(tmp_path) -> None:
     write_private_key(path, b"old")
     write_private_key(path, b"new")
     assert path.read_bytes() == b"new"
+
+
+def test_write_private_key_tightens_an_existing_world_readable_file(tmp_path) -> None:
+    path = tmp_path / "frpc.toml"
+    path.write_bytes(b"old")
+    path.chmod(0o644)
+    write_private_key(path, b"new secret")
+    assert path.read_bytes() == b"new secret"
+    assert path.stat().st_mode & 0o777 == 0o600

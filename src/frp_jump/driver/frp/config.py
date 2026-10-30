@@ -181,6 +181,29 @@ def build_frpc_config(
     return config
 
 
+# The only parts of frpc.toml that frpc's `/api/reload` applies to a running
+# process. Verified against frp v0.70.0 (`client/config_manager.go`
+# ReloadFromFile -> `Service.UpdateConfigSource`): the reload re-reads the
+# file but keeps everything common (server address, TLS, metadatas,
+# transport, log, webServer) from process start, using the new common
+# section only to filter which proxies/visitors to start.
+_RELOADABLE_KEYS = frozenset({"proxies", "visitors"})
+
+
+def needs_restart(old: dict | None, new: dict) -> bool:
+    """Whether going from frpc config ``old`` to ``new`` needs a process
+    restart, or a hot reload is enough. ``old`` is ``None`` when nothing is
+    running yet. Any difference outside proxies/visitors means a restart,
+    because a reload would silently keep the old value."""
+    if old is None:
+        return True
+
+    def common(config: dict) -> dict:
+        return {key: value for key, value in config.items() if key not in _RELOADABLE_KEYS}
+
+    return common(old) != common(new)
+
+
 def build_frps_config(
     desired: RelayState,
     *,

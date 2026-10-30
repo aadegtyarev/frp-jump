@@ -121,6 +121,7 @@ def _make_driver(settings: Settings) -> FrpDriver:
         binary=binaries.frpc,
         state_dir=settings.data_dir / "frpc",
         fallback_timeout_ms=settings.xtcp_fallback_timeout_ms,
+        reserved_ports=_port_range(settings),
     )
 
 

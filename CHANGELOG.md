@@ -6,6 +6,27 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+### Changed
+
+- **A new connection no longer drops a device's other connections.** The agent
+  used to restart frpc on every config change, so a phone opening port 80 on a
+  controller killed the ssh session already running to it over port 22. It now
+  hot-reloads frpc through frpc's admin API, which stops and starts only the
+  connections that changed. A change to the relay address, certificate, device
+  token or other non-connection settings still restarts frpc, and so does a
+  reload that fails (logged once as a warning).
+
+### Security
+
+- frpc's admin API, needed for the reload, runs only on a random loopback port
+  with a random user name and password generated at every frpc start. Other
+  devices of the same owner can reach that port through a grant, so it is never
+  left unauthenticated. The credentials live only in the agent's memory and in
+  `frpc.toml`. See [Security model](docs/security.md#the-local-frpc-admin-api).
+- Secret files (`frpc.toml`, private keys) are now forced to `0600` on every
+  write. Previously a file that already existed with looser permissions kept
+  them.
+
 ## [0.3.15] - 2026-10-06
 
 ### Security

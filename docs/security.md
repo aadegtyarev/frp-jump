@@ -99,6 +99,34 @@ the same whether the name belongs to a stranger or to nobody. Since names are
 unique per owner rather than globally, your own devices are the only namespace
 you can observe at all.
 
+## The local frpc admin API
+
+The agent hot-reloads frpc rather than restarting it, so that a new connection
+to a device does not drop the connections already running to it. The reload
+goes through frpc's admin API, and that API is a real attack surface: every
+other device of the same owner can reach any `127.0.0.1` port of this device
+through an ordinary grant, and the admin API can rewrite frpc's config and
+reload it.
+
+So the agent never runs it open:
+
+- It listens on `127.0.0.1` only, on a random free port chosen at every frpc
+  start.
+- It requires HTTP basic auth. User name and password are each 256 random bits,
+  generated at every frpc start. frp compares them in constant time and delays
+  each failed attempt by 200 ms.
+- The credentials exist only in the agent's memory and in `frpc.toml`, which
+  already holds every connection's shared secret and is kept `0600`.
+- frpc reads them once at start; a reload cannot change them. New credentials
+  always mean a new frpc process.
+
+The server does not refuse grants to the admin port. It cannot know the port,
+which is local, random and different after every frpc start, and connecting to
+arbitrary local ports is what a grant is for. The credentials are the boundary.
+They also keep out other local accounts on the device, which can reach any
+loopback port too. Whoever can read `frpc.toml` runs as the agent's account and
+can already read the device's `state.json`, so they gain nothing new.
+
 ## Turning a device off
 
 This is the part worth reading carefully, because "disabled" means something
@@ -139,7 +167,8 @@ However, legacy certificate-only logins are still accepted, so this mode is
 not full device revocation. After all clients, including offline devices,
 have been updated, set it to `true` and restart the server. Existing enrollment,
 local port assignments, SSH profiles and per-grant names are retained.
-Server or client restarts briefly interrupt the tunnels they run.
+Server or client restarts briefly interrupt the tunnels they run. A connection
+being added or removed does not: the agent hot-reloads frpc instead.
 
 ## Rotating your key
 

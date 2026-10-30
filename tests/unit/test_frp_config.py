@@ -1,7 +1,14 @@
 import tomllib
 
+import pytest
+
 from frp_jump.driver.base import ConsumedGrant, DesiredState, ExposedService, RelayState
-from frp_jump.driver.frp.config import build_frpc_config, build_frps_config, write_toml
+from frp_jump.driver.frp.config import (
+    build_frpc_config,
+    build_frps_config,
+    needs_restart,
+    write_toml,
+)
 
 
 def _desired(**overrides) -> DesiredState:
@@ -138,3 +145,60 @@ def test_write_toml_round_trips_through_tomllib(tmp_path) -> None:
     write_toml(config, path)
     loaded = tomllib.loads(path.read_text())
     assert loaded == config
+
+
+def _frpc(**overrides) -> dict:
+    return build_frpc_config(
+        _desired(**overrides),
+        cert_file="/c",
+        key_file="/k",
+        ca_file="/ca",
+        fallback_timeout_ms=1500,
+    )
+
+
+def test_needs_restart_when_nothing_is_running_yet() -> None:
+    assert needs_restart(None, _frpc()) is True
+
+
+def test_needs_restart_false_when_only_proxies_and_visitors_change() -> None:
+    old = _frpc(exposed=(ExposedService(grant_id="g1", secret="s1", local_port=22),))
+    new = _frpc(
+        exposed=(
+            ExposedService(grant_id="g1", secret="s1", local_port=22),
+            ExposedService(grant_id="g2", secret="s2", local_port=80),
+        ),
+        consumed=(ConsumedGrant(grant_id="g3", secret="s3", local_bind_port=2222),),
+    )
+    assert needs_restart(old, new) is False
+    assert needs_restart(new, old) is False
+    assert needs_restart(new, _frpc()) is False
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"server_addr": "other.example.com"},
+        {"server_port": 7001},
+        {"api_token": "tok"},  # metadatas + transport heartbeat settings
+        {"device_id": "dev-2", "api_token": "tok-2"},
+    ],
+)
+def test_needs_restart_true_when_common_settings_change(overrides) -> None:
+    base = _frpc(api_token="tok") if "device_id" in overrides else _frpc()
+    assert needs_restart(base, _frpc(**overrides)) is True
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda c: c["transport"]["tls"].update(certFile="/other"),
+        lambda c: c["log"].update(level="info"),
+        lambda c: c.update(webServer={"port": 1}),
+        lambda c: c.update(loginFailExit=True),
+    ],
+)
+def test_needs_restart_true_for_any_other_top_level_difference(mutate) -> None:
+    new = _frpc()
+    mutate(new)
+    assert needs_restart(_frpc(), new) is True

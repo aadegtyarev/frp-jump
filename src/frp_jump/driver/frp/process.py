@@ -1,7 +1,7 @@
 """Supervise a long-running frpc/frps subprocess.
 
 Kept separate from ``driver.py`` and behind the ``ProcessSupervisor``
-Protocol so the config-diffing / restart-on-change logic in ``FrpDriver``
+Protocol so the config-diffing / reload-or-restart logic in ``FrpDriver``
 can be unit-tested without spawning any real process.
 """
 

@@ -46,9 +46,15 @@ def generate_id() -> str:
 def write_private_key(path: Path, data: bytes) -> None:
     """Write a private key with restrictive permissions from creation, not
     chmod after -- chmod-after-write leaves a window where the key is
-    readable by anyone on the box (default umask)."""
+    readable by anyone on the box (default umask).
+
+    The mode passed to ``os.open`` only applies when the file is created;
+    an already existing, looser file (an older install, a manual copy)
+    would keep its mode. ``fchmod`` tightens it before the new secret is
+    written into it."""
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
+        os.fchmod(fd, 0o600)
         os.write(fd, data)
     finally:
         os.close(fd)

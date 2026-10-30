@@ -469,3 +469,13 @@ def test_admin_port_avoids_reserved_ports(tmp_path, monkeypatch) -> None:
     )
     driver.apply(_desired())
     assert _frpc_toml(tmp_path)["webServer"]["port"] == 51000
+
+
+def test_unchanged_secret_file_with_loose_mode_is_tightened(tmp_path):
+    from frp_jump.driver.frp.driver import _write_if_changed
+
+    key = tmp_path / "tls.key"
+    key.write_bytes(b"secret")
+    key.chmod(0o644)
+    assert _write_if_changed(key, b"secret", restrictive=True) is False
+    assert key.stat().st_mode & 0o777 == 0o600

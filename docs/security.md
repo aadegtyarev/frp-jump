@@ -112,7 +112,8 @@ So the agent never runs it open:
 
 - It listens on `127.0.0.1` only, on a random free port chosen at every frpc
   start.
-- It requires HTTP basic auth. User name and password are each 256 random bits,
+- Every route except `/healthz`, which answers an empty 200, requires HTTP
+  basic auth. User name and password are each 256 random bits,
   generated at every frpc start. frp compares them in constant time and delays
   each failed attempt by 200 ms.
 - The credentials exist only in the agent's memory and in `frpc.toml`, which

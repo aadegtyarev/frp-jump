@@ -26,7 +26,8 @@ remote-config channel into this device. So the webServer is never left
 open:
 
 - it binds ``127.0.0.1`` on a random free port, chosen per frpc start;
-- it requires HTTP basic auth (frp's ``webServer.user``/``password``,
+- every route but ``/healthz`` (an empty 200) requires HTTP basic auth
+  (frp's ``webServer.user``/``password``,
   checked in constant time with a 200ms delay per failure, and with both
   empty frp would skip auth entirely, so both are always set), each a
   fresh ``secrets.token_urlsafe(32)`` per frpc start;
@@ -194,6 +195,8 @@ def _write_if_changed(path: Path, data: bytes, *, restrictive: bool = False) -> 
     device's flash has a finite write budget worth not burning on
     rewriting identical bytes."""
     if path.is_file() and path.read_bytes() == data:
+        if restrictive:
+            path.chmod(0o600)
         return False
     if restrictive:
         write_private_key(path, data)

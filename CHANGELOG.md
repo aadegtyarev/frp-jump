@@ -6,6 +6,8 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.16] - 2026-10-31
+
 ### Changed
 
 - **A new connection no longer drops a device's other connections.** The agent

@@ -6,6 +6,8 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.18] - 2026-10-31
+
 ### Changed
 
 - The `frp-jump-client` Debian package now recommends `tmux`, so the Android

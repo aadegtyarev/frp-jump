@@ -881,6 +881,11 @@ def devices_add_token_cmd(
         help="Fix the new device's name now. Leave unset to let the new "
         "device pick its own name at enroll time (`enroll ... --name`).",
     ),
+    qr: bool = typer.Option(
+        False,
+        "--qr",
+        help="Also print the enroll line as a QR code, for the Android app to scan.",
+    ),
 ) -> None:
     """Mint a one-time enroll token for one more device of your own. If
     that device has its own SSH key, it can skip tokens entirely and
@@ -891,6 +896,8 @@ def devices_add_token_cmd(
         frp-jump-client devices add-token
 
         frp-jump-client devices add-token --name laptop
+
+        frp-jump-client devices add-token --name phone --qr
     """
     settings = Settings()
     state = _require_state(settings)
@@ -901,10 +908,40 @@ def devices_add_token_cmd(
         raise typer.Exit(1) from exc
 
     command = f"frp-jump-client enroll {state.control_url} {issued['token']}"
+    # The QR carries no placeholder: the app asks for a name itself.
+    scanned = command
     if not name:
         command += " --name <pick-a-name>"
     console.print("Run this on the new device to enroll it (shown once):")
     console.print(f"[bold]{command}[/bold]")
+    if qr:
+        console.print("Or scan it with the Android app:")
+        print(enroll_qr(scanned))
+
+
+def enroll_qr(text: str) -> str:
+    """`text` as a QR code drawn with half-block characters, two modules
+    per character row, quiet zone included. Light modules are the block
+    glyphs, so on a usual dark terminal it reads dark-on-light like paper;
+    on a light terminal it comes out inverted, which the app also reads."""
+    import segno
+
+    matrix = segno.make(text, error="m").matrix_iter(border=4)
+    rows = [[bool(module) for module in row] for row in matrix]
+    if len(rows) % 2:
+        rows.append([False] * len(rows[0]))
+    # (top dark, bottom dark) -> glyph; the glyph draws the light half.
+    chars = {
+        (False, False): "\u2588",
+        (True, False): "\u2584",
+        (False, True): "\u2580",
+        (True, True): " ",
+    }
+    lines = [
+        "".join(chars[pair] for pair in zip(rows[y], rows[y + 1], strict=True))
+        for y in range(0, len(rows), 2)
+    ]
+    return "\n".join(lines)
 
 
 def _is_recent(last_seen_at: str | None, *, threshold_seconds: float) -> bool:

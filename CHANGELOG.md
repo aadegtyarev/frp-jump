@@ -6,6 +6,11 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+### Added
+
+- `frp-jump-client devices add-token --qr` also prints the enroll line as a QR
+  code in the terminal, so the Android app can enroll by scanning it.
+
 ## [0.3.16] - 2026-10-31
 
 ### Changed

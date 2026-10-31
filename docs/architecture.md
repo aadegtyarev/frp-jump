@@ -190,7 +190,8 @@ optional `[server]` extra, so a device install never imports them.
 Rust toolchain to build from source. Keeping it off the client's dependency
 chain is worth it for that alone. `common/crypto.py`'s `write_private_key` —
 which the client does use — is deliberately dependency-free for the same reason,
-rather than living next to `common/pki.py`.
+rather than living next to `common/pki.py`. The client's one extra is `segno`
+(pure Python, no dependencies), for `devices add-token --qr`.
 
 The `.deb` bundles its own Python 3.12 under `/opt/frp-jump-client`, built per
 architecture through `docker buildx` with QEMU. See

@@ -821,3 +821,21 @@ def test_enroll_qr_draws_two_module_rows_per_line():
     lines = client_cmds.enroll_qr(text).splitlines()
     assert len(lines) == (size + 1) // 2
     assert all(len(line) == size for line in lines)
+
+
+def test_enroll_qr_glyphs_draw_the_light_modules():
+    import segno
+
+    text = "frp-jump-client enroll https://ctl.example.com newtok"
+    dark = [[bool(m) for m in row] for row in segno.make(text, error="m").matrix_iter(border=4)]
+    light_halves = {
+        "\u2588": (True, True),
+        "\u2580": (True, False),
+        "\u2584": (False, True),
+        " ": (False, False),
+    }
+    drawn = []
+    for line in client_cmds.enroll_qr(text).splitlines():
+        drawn.append([not light_halves[c][0] for c in line])
+        drawn.append([not light_halves[c][1] for c in line])
+    assert drawn[: len(dark)] == dark

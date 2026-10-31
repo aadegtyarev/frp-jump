@@ -6,6 +6,12 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+### Changed
+
+- The `frp-jump-client` Debian package now depends on `tmux`, so the Android
+  app's terminal tabs can survive a dropped connection. pip installs are not
+  affected; the app falls back to a plain shell when tmux is missing.
+
 ## [0.3.17] - 2026-10-31
 
 ### Added

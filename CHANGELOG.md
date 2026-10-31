@@ -6,6 +6,8 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.17] - 2026-10-31
+
 ### Added
 
 - `frp-jump-client devices add-token --qr` also prints the enroll line as a QR

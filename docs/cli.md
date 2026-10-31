@@ -145,7 +145,7 @@ cleaning up a connection you left running on a machine you are not at.
 ## devices
 
 ```
-frp-jump-client devices add-token [--name NAME]
+frp-jump-client devices add-token [--name NAME] [--qr]
 frp-jump-client devices list
 frp-jump-client devices delete NAME [--yes]
 frp-jump-client devices disable NAME
@@ -156,7 +156,8 @@ Everything here is scoped to devices you own. A device you don't own returns
 "not found", whoever owns it.
 
 `add-token` mints a one-time token for one more device of your own. It is
-printed once and expires in 24 hours by default.
+printed once and expires in 24 hours by default. `--qr` also prints the
+enroll line as a QR code in the terminal, for the Android app to scan.
 
 `disable` is reversible and takes effect on the target's next poll: its tunnels
 go away, and its token stops working for anything that changes state. `delete`

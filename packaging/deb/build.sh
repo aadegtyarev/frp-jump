@@ -58,13 +58,13 @@ Version: $VERSION
 Section: net
 Priority: optional
 Architecture: $DEB_ARCH
-Depends: tmux
+Recommends: tmux
 Maintainer: Alexander Degtyarev <a.degtyarev@struhe.com>
 Description: frp-jump tunnel agent (self-contained)
  P2P-with-relay-fallback ssh/http/tcp tunnel client agent. Ships its own
  Python 3.12 runtime under /opt/frp-jump-client -- does not touch or
- require the system Python/pip. Requires tmux so the frp-jump Android
- app can keep terminal sessions alive across a dropped connection.
+ require the system Python/pip. Recommends tmux: with it the frp-jump
+ Android app keeps terminal sessions alive across a dropped connection.
 Homepage: https://github.com/aadegtyarev/frp-jump
 EOF
 

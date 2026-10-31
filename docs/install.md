@@ -78,6 +78,21 @@ sudo apt install ./frp-jump-client_X.Y.Z_arm64.deb
 
 Upgrades are on you: repeat the download for each release.
 
+## Optional: tmux
+
+The Android app opens terminal tabs inside tmux when the machine has it
+(version 2.4 or newer). The shell then survives a dropped connection: the tab
+reconnects to the same session and running commands keep going. Without tmux
+the app falls back to a plain shell, which ends when the connection drops.
+
+The `.deb` recommends tmux, so apt installs it unless you pass
+`--no-install-recommends` (`dpkg -i` skips it too). With a pip install, or if
+you skipped it, install it yourself:
+
+```sh
+sudo apt install tmux
+```
+
 ## What gets downloaded later
 
 No installation method bundles frp itself. The first time an agent runs, it

@@ -86,7 +86,8 @@ reconnects to the same session and running commands keep going. Without tmux
 the app falls back to a plain shell, which ends when the connection drops.
 
 The `.deb` recommends tmux, so apt installs it unless you pass
-`--no-install-recommends`. With pip, or to add it later:
+`--no-install-recommends` (`dpkg -i` skips it too). With a pip install, or if
+you skipped it, install it yourself:
 
 ```sh
 sudo apt install tmux

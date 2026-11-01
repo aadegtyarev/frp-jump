@@ -14,6 +14,7 @@ from urllib.parse import quote
 import httpx
 
 from frp_jump.agent import hosts
+from frp_jump.agent.device_kind import detect_kind
 from frp_jump.agent.state import AgentState, load, save, wake_path
 from frp_jump.common import ssh_signing
 from frp_jump.common.api import (
@@ -174,12 +175,22 @@ def fetch_server_version(
 
 
 def send_heartbeat(
-    state: AgentState, *, agent_version: str | None = None, timeout: float = _HTTP_TIMEOUT_SECONDS
+    state: AgentState,
+    *,
+    agent_version: str | None = None,
+    kind: str | None = None,
+    timeout: float = _HTTP_TIMEOUT_SECONDS,
 ) -> None:
+    """Report liveness, the agent version and, if known, the detected device
+    kind. A server older than the device-display feature ignores ``kind``
+    (pydantic drops unknown fields), so it is sent regardless of version."""
+    body: dict[str, str | None] = {"agent_version": agent_version}
+    if kind is not None:
+        body["kind"] = kind
     try:
         resp = httpx.post(
             f"{_control_url(state)}{AGENT_API_PREFIX}/heartbeat",
-            json={"agent_version": agent_version},
+            json=body,
             headers=_auth_headers(state),
             timeout=timeout,
         )
@@ -553,6 +564,7 @@ def sync_once(
     ssh_config_path: Path,
     port_range: range,
     agent_version: str | None = None,
+    kind: str | None = None,
     revalidate_ports: bool = False,
 ) -> DesiredState:
     """One full cycle: heartbeat, pull desired state, apply it, refresh ssh config.
@@ -579,7 +591,7 @@ def sync_once(
         state.local_ports = on_disk.local_ports
         state.disable_p2p = on_disk.disable_p2p
 
-    send_heartbeat(state, agent_version=agent_version)
+    send_heartbeat(state, agent_version=agent_version, kind=kind)
     remote = fetch_desired_state(state)
     _log_grant_changes(state.device_id, remote)
     desired = build_desired_state(
@@ -620,6 +632,12 @@ def run_forever(
     # below runs immediately regardless, with no prior sleep to skip.
     wake_path(data_dir).unlink(missing_ok=True)
 
+    # Detected once per start and sent in every heartbeat: the hardware
+    # does not change under a running agent, and resending repairs the
+    # stored value after a server database restore.
+    kind = detect_kind()
+    logger.info("detected device kind: %s", kind)
+
     # Revalidate persisted local ports only on the first successful cycle
     # after a (re)start -- see build_desired_state's docstring for why this
     # must not happen on every cycle.
@@ -634,6 +652,7 @@ def run_forever(
                 ssh_config_path=ssh_config_path,
                 port_range=port_range,
                 agent_version=agent_version,
+                kind=kind,
                 revalidate_ports=first_cycle,
             )
             first_cycle = False

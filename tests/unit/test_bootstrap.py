@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 
 from frp_jump.common.settings import Settings
@@ -48,3 +50,15 @@ def test_load_or_create_relay_cert_requires_relay_public_addr(tmp_path) -> None:
     ca = bootstrap.load_or_create_ca(settings)
     with pytest.raises(bootstrap.ConfigError):
         bootstrap.load_or_create_relay_cert(settings, ca)
+
+
+def test_initialize_reports_a_newer_database_as_config_error(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    bootstrap.initialize(settings)
+    conn = sqlite3.connect(bootstrap.db_path(settings))
+    conn.execute("UPDATE schema_version SET version = 99")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(bootstrap.ConfigError, match="schema version 99 is newer"):
+        bootstrap.initialize(settings)

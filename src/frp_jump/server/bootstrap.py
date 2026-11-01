@@ -16,6 +16,7 @@ from frp_jump.common.crypto import write_private_key
 from frp_jump.common.pki import CertificateAuthority, KeyCertPair
 from frp_jump.common.settings import Settings
 from frp_jump.server.db import make_engine
+from frp_jump.server.migrations import MigrationError
 
 
 class ConfigError(ValueError):
@@ -94,9 +95,12 @@ def initialize(settings: Settings) -> BootstrapResult:
 
     _ensure_data_dir(settings)
     ca = load_or_create_ca(settings)
-    # Creates the sqlite file and every table on first run; a no-op
-    # otherwise (SQLModel.metadata.create_all only adds missing tables).
-    make_engine(db_path(settings))
+    # Creates the sqlite file and every table on first run, and upgrades
+    # an older schema (server/migrations.py); a no-op otherwise.
+    try:
+        make_engine(db_path(settings))
+    except MigrationError as exc:
+        raise ConfigError(str(exc)) from exc
 
     return BootstrapResult(
         data_dir=settings.data_dir,

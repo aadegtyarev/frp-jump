@@ -1,5 +1,6 @@
 import contextlib
 import datetime
+import sqlite3
 import subprocess
 import tempfile
 from pathlib import Path
@@ -261,3 +262,20 @@ def test_users_show_closes_db_before_querying_frps_traffic(db_session, monkeypat
 
     assert result.exit_code == 0, result.output
     assert events == ["db_closed", "frps_queried"]
+
+
+def test_admin_command_reports_a_newer_database_and_exits_1(tmp_path, monkeypatch):
+    from frp_jump.server.db import make_engine
+
+    monkeypatch.setenv("FRP_JUMP_DATA_DIR", str(tmp_path))
+    db_path = server_cmds.bootstrap.db_path(server_cmds.Settings())
+    make_engine(db_path).dispose()
+    conn = sqlite3.connect(db_path)
+    conn.execute("UPDATE schema_version SET version = 99")
+    conn.commit()
+    conn.close()
+
+    result = runner.invoke(server_cmds.app, ["users", "list"])
+
+    assert result.exit_code == 1
+    assert "schema version 99 is newer than this frp-jump supports" in result.output

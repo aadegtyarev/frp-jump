@@ -6,6 +6,8 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.19] - 2026-11-01
+
 ### Added
 
 - **Device labels and icons.** Each device can carry a free-text label such as

@@ -275,6 +275,32 @@ def enable_device(
     _set_device_enabled(state, device_name, enabled=True, timeout=timeout)
 
 
+def set_device_display(
+    state: AgentState,
+    device_name: str,
+    changes: dict[str, str | None],
+    *,
+    timeout: float = _HTTP_TIMEOUT_SECONDS,
+) -> dict:
+    """`client devices label` / `devices icon`: set the label and/or icon
+    override of one of your own devices. ``changes`` holds only the fields
+    to change (``label``, ``icon``); a null value clears that field.
+    Returns the updated device, in the ``list_devices`` item shape."""
+    try:
+        resp = httpx.post(
+            f"{_control_url(state)}{AGENT_API_PREFIX}/devices/"
+            f"{quote(device_name, safe='')}/display",
+            json=changes,
+            headers=_auth_headers(state),
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        raise SyncError(f"could not reach {state.control_url}: {exc}") from exc
+    if resp.status_code != 200:
+        raise SyncError(f"display update failed ({resp.status_code}): {resp.text}")
+    return resp.json()
+
+
 def set_key(
     state: AgentState,
     identity_path: Path,

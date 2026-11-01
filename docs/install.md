@@ -34,12 +34,14 @@ sudo apt install frp-jump-client
 New releases then arrive with your normal `apt upgrade`.
 
 An upgrade restarts the agent's system service if it is running, so the new
-version takes over right away. A stopped agent stays stopped, and a per-user
-service (`install-service --user`) is left alone: restart it yourself with
-`systemctl --user restart frp-jump-client`. The restart drops every tunnel on
-the machine for a few seconds, including the ssh session you may be upgrading
-it through. Run the upgrade inside tmux, or with `nohup`, so it finishes
-anyway.
+version takes over: about 30 seconds after the upgrade finishes, through a
+one-off systemd timer. The restart drops every tunnel on the machine for a few
+seconds. The delay lets an `apt upgrade` you run over one of those tunnels
+finish first; your ssh session drops afterwards and you reconnect. A stopped
+agent stays stopped, and a per-user service (`install-service --user`) is left
+alone: restart it yourself with `systemctl --user restart frp-jump-client`.
+Reconfiguring the package (`dpkg-reconfigure`, `dpkg --configure -a`) restarts
+a running agent the same way.
 
 The upgrade also removes any `*.dist-info` metadata under
 `/opt/frp-jump-client/site-packages` that the package doesn't ship. That

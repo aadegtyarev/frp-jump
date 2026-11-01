@@ -29,12 +29,24 @@ remove_unowned_dist_info() {
 if [ "$1" = "configure" ]; then
     remove_unowned_dist_info
     systemctl daemon-reload || true
-    # On upgrade, restart the agent only if it is running now, so it picks up
-    # the new code; never start a stopped or never-installed one. Only the
-    # system unit: a `install-service --user` unit belongs to that user's
-    # manager. deb-systemd-invoke also honours policy-rc.d (chroots, images).
+    # With a previously configured version (an upgrade, but also a reconfigure
+    # or `dpkg --configure -a`, where a restart is harmless), restart the
+    # agent only if it is running now, so it picks up the new code; never
+    # start a stopped or never-installed one. Only the system unit: an
+    # `install-service --user` unit belongs to that user's manager.
+    #
+    # The restart drops every tunnel on the machine, possibly including the
+    # ssh session this very `apt upgrade` runs in. So on a live systemd host
+    # it is handed to a transient timer and happens ~30 s later, after apt
+    # has finished, instead of killing apt mid-run. Without systemd (chroots,
+    # image builds) the synchronous fallback runs; deb-systemd-invoke there
+    # also honours policy-rc.d.
     if [ -n "$2" ]; then
-        if command -v deb-systemd-invoke >/dev/null 2>&1; then
+        if [ -d "${DPKG_ROOT:-}/run/systemd/system" ] \
+            && command -v systemd-run >/dev/null 2>&1; then
+            systemd-run --quiet --no-block --on-active=30 \
+                systemctl try-restart "$PACKAGE.service" || true
+        elif command -v deb-systemd-invoke >/dev/null 2>&1; then
             deb-systemd-invoke try-restart "$PACKAGE.service" || true
         else
             systemctl try-restart "$PACKAGE.service" || true

@@ -13,8 +13,17 @@ import pytest
 
 POSTINST = Path(__file__).resolve().parents[2] / "packaging" / "deb" / "postinst"
 SITE = "/opt/frp-jump-client/site-packages"
-OWNED_DIST_INFO = ["frp_jump-0.3.19.dist-info", "httpx-0.28.1.dist-info"]
-STALE_DIST_INFO = ["frp_jump-0.3.15.dev0.dist-info", "httpx-0.27.0.dist-info"]
+# The names with spaces check the script's quoting, not a real-world layout.
+OWNED_DIST_INFO = [
+    "frp_jump-0.3.19.dist-info",
+    "httpx-0.28.1.dist-info",
+    "owned name-1.0.dist-info",
+]
+STALE_DIST_INFO = [
+    "frp_jump-0.3.15.dev0.dist-info",
+    "httpx-0.27.0.dist-info",
+    "stale name-0.1.dist-info",
+]
 
 
 def _stub(bin_dir: Path, name: str, body: str) -> None:
@@ -35,7 +44,7 @@ def env(tmp_path):
     owned = tmp_path / "owned.txt"
     owned.write_text("".join(f"{SITE}/{d}\n" for d in ["", *OWNED_DIST_INFO]))
     _stub(bin_dir, "dpkg-query", f'cat "{owned}"')
-    for tool in ("systemctl", "deb-systemd-invoke"):
+    for tool in ("systemctl", "deb-systemd-invoke", "systemd-run"):
         _stub(bin_dir, tool, f'echo "{tool} $*" >> "{calls}"')
 
     root = tmp_path / "root"
@@ -49,6 +58,7 @@ def env(tmp_path):
         "bin": bin_dir,
         "calls": calls,
         "owned": owned,
+        "root": root,
         "site": site,
         "vars": {"PATH": str(bin_dir), "DPKG_ROOT": str(root)},
     }
@@ -81,7 +91,40 @@ def test_no_ownership_list_keeps_everything(env, dpkg_query):
     assert len(list(env["site"].iterdir())) == len(OWNED_DIST_INFO + STALE_DIST_INFO) + 1
 
 
-def test_upgrade_try_restarts_the_system_unit(env):
+def test_unowned_symlinked_dist_info_is_unlinked_not_followed(env, tmp_path):
+    target = tmp_path / "elsewhere.dist-info"
+    target.mkdir()
+    (target / "METADATA").write_text("Metadata-Version: 2.4\n")
+    (env["site"] / "linked-1.0.dist-info").symlink_to(target)
+
+    _run(env, "configure", "0.3.18")
+
+    assert not (env["site"] / "linked-1.0.dist-info").is_symlink()
+    assert (target / "METADATA").is_file()
+
+
+def test_non_directory_dist_info_is_left_alone(env):
+    stray = env["site"] / "stray-1.0.dist-info"
+    stray.write_text("not metadata\n")
+
+    _run(env, "configure", "0.3.18")
+
+    assert stray.is_file()
+
+
+def test_upgrade_on_systemd_schedules_a_delayed_detached_restart(env):
+    (env["root"] / "run" / "systemd" / "system").mkdir(parents=True)
+
+    calls = _run(env, "configure", "0.3.18")
+
+    assert calls == [
+        "systemctl daemon-reload",
+        "systemd-run --quiet --no-block --on-active=30 "
+        "systemctl try-restart frp-jump-client.service",
+    ]
+
+
+def test_upgrade_without_systemd_try_restarts_synchronously(env):
     calls = _run(env, "configure", "0.3.18")
 
     assert calls == [
@@ -91,6 +134,8 @@ def test_upgrade_try_restarts_the_system_unit(env):
 
 
 def test_fresh_install_does_not_touch_the_service(env):
+    (env["root"] / "run" / "systemd" / "system").mkdir(parents=True)
+
     calls = _run(env, "configure", "")
 
     assert calls == ["systemctl daemon-reload"]

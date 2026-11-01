@@ -1,6 +1,8 @@
 import multiprocessing
 import os
 import sqlite3
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -54,6 +56,14 @@ def table_names(path: Path) -> list[str]:
     conn = sqlite3.connect(path)
     try:
         return [row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+    finally:
+        conn.close()
+
+
+def version_rows(path: Path) -> int:
+    conn = sqlite3.connect(path)
+    try:
+        return conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0]
     finally:
         conn.close()
 
@@ -214,6 +224,7 @@ def test_two_processes_migrate_a_0_3_file_once(tmp_path):
     for column in NEW_COLUMNS:
         assert columns.count(column) == 1
     assert version_of(path) == 1
+    assert version_rows(path) == 1
 
 
 def test_two_processes_create_an_empty_file_once(tmp_path):
@@ -226,3 +237,84 @@ def test_two_processes_create_an_empty_file_once(tmp_path):
     assert len(tables) == len(set(tables))
     assert {"devices", "users", "grants", "schema_version"} <= set(tables)
     assert version_of(path) == 1
+    assert version_rows(path) == 1
+
+
+def test_runner_waiting_for_the_lock_sees_the_other_migration_and_does_nothing(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "db.sqlite3"
+    make_0_3_db(path)
+    # The parent plays the other process: it migrates under its own write
+    # lock and commits only once the runner has read version 0 and is
+    # waiting for that lock.
+    other = sqlite3.connect(path, isolation_level=None)
+    other.execute("BEGIN IMMEDIATE")
+    migrations._migration_1(other)
+    other.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+    other.execute("INSERT INTO schema_version (version) VALUES (1)")
+
+    def must_not_run(*args):
+        raise AssertionError("the runner must not write after another process migrated")
+
+    monkeypatch.setattr(migrations, "_create_model_tables", must_not_run)
+    monkeypatch.setattr(migrations, "MIGRATIONS", [(1, must_not_run)])
+    first_read = threading.Event()
+    read_version = migrations._read_version
+
+    def signalling_read(conn):
+        version = read_version(conn)
+        first_read.set()
+        return version
+
+    monkeypatch.setattr(migrations, "_read_version", signalling_read)
+    outcome = []
+
+    def runner():
+        try:
+            migrations.migrate_file(path)
+            outcome.append("ok")
+        except BaseException as exc:
+            outcome.append(repr(exc))
+
+    thread = threading.Thread(target=runner)
+    thread.start()
+    try:
+        assert first_read.wait(timeout=10)
+        time.sleep(0.3)  # the runner is now blocked on BEGIN IMMEDIATE
+        other.execute("COMMIT")
+    finally:
+        thread.join(timeout=15)
+        other.close()
+
+    assert outcome == ["ok"]
+    assert version_of(path) == 1
+    assert version_rows(path) == 1
+
+
+def test_failing_step_rolls_back_everything(tmp_path, monkeypatch):
+    def broken_step(conn):
+        migrations._migration_1(conn)
+        raise RuntimeError("step failed after its ALTER")
+
+    monkeypatch.setattr(migrations, "MIGRATIONS", [(1, broken_step)])
+    path = tmp_path / "db.sqlite3"
+    make_0_3_db(path)
+
+    with pytest.raises(RuntimeError, match="step failed after its ALTER"):
+        make_engine(path)
+
+    assert "label" not in device_columns(path)
+    assert "schema_version" not in table_names(path)
+
+
+def test_add_column_treats_duplicate_column_as_applied(tmp_path):
+    conn = sqlite3.connect(tmp_path / "db.sqlite3", isolation_level=None)
+    conn.execute("CREATE TABLE devices (id VARCHAR, label VARCHAR)")
+
+    migrations._add_column(conn, "devices", "label")
+
+    assert [row[1] for row in conn.execute("PRAGMA table_info(devices)")] == ["id", "label"]
+    with pytest.raises(sqlite3.OperationalError, match="no such table"):
+        migrations._add_column(conn, "missing", "label")
+    conn.close()

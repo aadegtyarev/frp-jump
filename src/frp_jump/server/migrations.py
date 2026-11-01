@@ -126,13 +126,15 @@ def migrate_connection(conn: sqlite3.Connection, location: str) -> None:
             return
         conn.execute("BEGIN IMMEDIATE")
         try:
-            _create_model_tables(conn)
+            # Another process may have migrated while this one waited for
+            # the lock; then there is nothing left to create or apply.
             version = _read_version(conn)
             _check_not_newer(version)
-            for step_version, step in MIGRATIONS:
-                if step_version > version:
-                    step(conn)
-            if version != CURRENT_VERSION:
+            if version < CURRENT_VERSION:
+                _create_model_tables(conn)
+                for step_version, step in MIGRATIONS:
+                    if step_version > version:
+                        step(conn)
                 _write_version(conn, CURRENT_VERSION)
             conn.execute("COMMIT")
         except BaseException:
@@ -140,7 +142,7 @@ def migrate_connection(conn: sqlite3.Connection, location: str) -> None:
                 conn.execute("ROLLBACK")
             raise
     except sqlite3.OperationalError as exc:
-        code = exc.sqlite_errorcode & 0xFF
+        code = getattr(exc, "sqlite_errorcode", 0) & 0xFF
         if code == sqlite3.SQLITE_BUSY:
             raise _busy() from exc
         if code in (sqlite3.SQLITE_READONLY, sqlite3.SQLITE_CANTOPEN):

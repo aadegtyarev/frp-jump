@@ -106,7 +106,12 @@ share them. They run in this order:
      bidi controls U+061C, U+200E, U+200F, U+202A–U+202E and U+2066–U+2069;
    - `Co` private use;
    - `Cs` surrogates;
-   - `Zl` and `Zp`, the line and paragraph separators U+2028 and U+2029.
+   - `Zl` and `Zp`, the line and paragraph separators U+2028 and U+2029;
+   - letters and symbols that render blank: U+115F and U+1160 (Hangul
+     choseong and jungseong fillers), U+3164 (Hangul filler), U+FFA0
+     (halfwidth Hangul filler) and U+2800 (blank Braille pattern). They are
+     in `L*` or `S*`, so without this entry they would pass step 5 and make
+     an invisible label.
 
    U+FE0F, the emoji presentation selector, is a combining mark (`Mn`). It is
    allowed, as all marks are. Unassigned code points (`Cn`) are allowed, so
@@ -115,7 +120,8 @@ share them. They run in this order:
    the request means "clear", and null is stored.
 5. **Visible.** What remains must contain at least one letter, digit,
    punctuation mark or symbol (categories `L*`, `N*`, `P*`, `S*`). A label of
-   only joiners or combining marks is rejected.
+   only joiners or combining marks is rejected. The blank-rendering letters
+   from step 3 never get this far.
 6. **Length.** At most **64 code points** after steps 2 and 4. A longer label is
    rejected, never cut.
 
@@ -246,8 +252,10 @@ frp-jump-client devices icon NAME ICON|auto
   only ever means "no such device".
 - On success, both print the device's resulting row in the `devices list`
   format.
+- If `TEXT` starts with `-`, put `--` before it, as for any Typer argument:
+  `devices label wb01 -- "-48 V, щит"`. The `--help` example shows this.
 - `devices list` gains two columns:
-  - **Label:** the text, or `-`;
+  - **Device label:** the text, or `-`;
   - **Icon:** `router` when the owner set it; `wirenboard (auto)` when it comes
     from the device; `-` when both are null or the server is old. After
     `devices icon X auto` on a device that reports nothing, the column shows
@@ -259,8 +267,15 @@ frp-jump-client devices icon NAME ICON|auto
 
 ### frp-jump-server
 
-- `devices list` and `users show` gain a read-only Label column, rendered the
-  same way (`Text`).
+- `devices list` and `users show` gain a read-only **Device label** column,
+  rendered the same way (`Text`).
+- Naming: users already have a `label` (`users add-key --label`, the "Label"
+  column of `users list`). That is the admin's handle for a person, with the
+  strict name character set. A device label is free text from the owner.
+  They are separate fields. In code the device field is `Device.label`, and
+  on the wire it is `label` inside a device object. In CLI tables and in the
+  docs it is always called "Device label", so the two never share a column
+  title.
 - An admin command to *set* a label is out of scope. The owner sets labels from
   their own devices.
 
@@ -307,6 +322,9 @@ error as "this rule does not match". The first matching rule wins:
    tree too, but rule 1 already caught it. The battery check does not run
    without DMI, so an ARM board with a fuel gauge, or an ARM laptop, comes out
    as `sbc`. The owner can override that.
+   An ARM virtual machine without DMI (QEMU `virt`) has a device tree and no
+   `hypervisor` flag, so it can come out as `sbc` too. The owner can override
+   that as well.
 6. Otherwise → `linux`.
 
 Tablets (type 30) count as laptops on purpose: the set has no tablet icon, and
@@ -346,22 +364,27 @@ release, so it introduces a small versioned runner in a new module,
 
 ### The version table
 
-- `schema_version`, one row, one integer `version`. It is created in raw SQL by
-  the runner, **not** as a SQLModel table. Otherwise `create_all` would try to
-  create it, which is a write, outside the lock described below.
+- `schema_version`, one row, one integer `version`. The runner creates it in
+  raw SQL, **not** as a SQLModel table, so nothing creates it outside the lock
+  described below.
 - A missing table or row reads as version 0, the 0.3.x schema.
 - The migrations are an ordered list of `(version, function)` pairs in code.
   Migration 1 adds `label`, `icon` and `kind` to `devices`. Each step checks
   `PRAGMA table_info` and adds only the columns that are missing, with
   `ALTER TABLE devices ADD COLUMN <name> VARCHAR` (nullable, no default, instant
   in SQLite whatever the table size). This makes every step idempotent. It also
-  covers a fresh database: `create_all` has already created `devices` with the
-  new columns, so migration 1 adds nothing and only records the version.
+  covers a fresh database: the runner has just created `devices` with the new
+  columns (see below), so migration 1 adds nothing and only records the
+  version.
+- A future release that adds a table also bumps the version. Creating tables
+  happens only while a migration is pending (see below), so a new table
+  without a version bump would never be created on an existing database.
 
 ### When it runs
 
-`make_engine` runs it right after `create_all`, before returning the engine.
-Every entry point that touches the database goes through `make_engine`:
+`make_engine` runs the runner instead of calling
+`SQLModel.metadata.create_all` itself, before returning the engine. Every entry
+point that touches the database goes through `make_engine`:
 
 - `frp-jump-server run`;
 - `init` and `install-service`, through `bootstrap`;
@@ -373,14 +396,37 @@ soon as the model has them.
 
 ### Locking and concurrency
 
-1. Read the version on a plain connection. If it is current, return without
-   writing anything, so a database already up to date never needs write
-   access.
-2. Otherwise, `BEGIN IMMEDIATE`. That takes SQLite's write lock up front, so the
-   version check and the `ALTER`s are one atomic step. The connection waits up
-   to 10 s for the lock (`busy_timeout`).
-3. Read the version again under the lock, apply the pending steps in order, set
-   the version, and `COMMIT`. On any error, `ROLLBACK` and stop.
+The runner works on a **raw `sqlite3` connection** opened with
+`isolation_level=None` and `timeout=10`. With pysqlite's default transaction
+handling, SQLAlchemy and the driver decide on their own when to emit `BEGIN`
+and `COMMIT`, which is not reliable enough to hold a lock across several
+statements. With `isolation_level=None`, every `BEGIN IMMEDIATE`, `COMMIT`
+and `ROLLBACK` is the runner's own. `timeout=10` is the 10 s wait for the
+lock.
+
+For `:memory:`, the unit-test path with `StaticPool`, the runner uses the
+engine's single shared DBAPI connection instead. A new
+`sqlite3.connect(":memory:")` would be a different, empty database. It sets
+`isolation_level=None` for the run and puts the old value back afterwards.
+
+1. Read the version. If it is current, return without writing anything, so a
+   database that is already up to date never needs write access.
+2. Otherwise, `BEGIN IMMEDIATE`. That takes SQLite's write lock up front, so
+   creating the tables, checking the version and running the `ALTER`s are one
+   atomic step. The connection waits up to 10 s for the lock.
+3. Under the lock:
+   1. Create the model's tables and indexes. The runner emits the DDL itself
+      on its own connection: SQLAlchemy's `CreateTable(..., if_not_exists=True)`
+      and `CreateIndex(..., if_not_exists=True)`, compiled for SQLite. It does
+      not call `metadata.create_all`, which opens and commits a transaction of
+      its own and would end the `BEGIN IMMEDIATE` early.
+   2. Read the version again.
+   3. Apply the pending steps in order.
+   4. Set the version and `COMMIT`.
+
+   On any error, `ROLLBACK` and stop. Creating the tables inside the lock is
+   what makes an empty file safe: two processes starting on a new database
+   cannot both create the same tables.
 4. A "duplicate column name" error from an `ALTER` counts as "already applied".
    It can only happen when another process changed the schema without this
    lock, for example with a hand-run `sqlite3`.
@@ -442,7 +488,9 @@ Unit tests in the existing files, following the repo's one-to-one layout:
   - newline, ESC, a bidi override and a private-use character, each rejected;
   - ZWJ emoji accepted;
   - only ZWJ rejected;
-  - whitespace-only clears;
+  - spaces only clears (a newline is rejected by rule 3, not cleared);
+  - each blank-rendering filler (U+3164, U+115F, U+1160, U+FFA0, U+2800),
+    alone and between spaces, is rejected;
   - a trailing `\n` is rejected, not stripped.
 
   Also: setting and clearing the icon, and lenient `kind` (a known value is
@@ -471,11 +519,15 @@ Unit tests in the existing files, following the repo's one-to-one layout:
   - a 0.3.x database with one device row: the row is intact, the new columns are
     null, version 1;
   - a fresh database: version 1, no `ALTER`;
+  - `:memory:` with `StaticPool`: tables created and version 1 on the shared
+    connection, and the app's sessions see them;
   - a second open does nothing and needs no write access;
   - a read-only file with a migration pending gives the clear error;
   - a newer version is refused;
   - **two processes** (`multiprocessing`) opening the same 0.3.x file at once:
-    both succeed, each column exists once, version 1.
+    both succeed, each column exists once, version 1;
+  - **two processes** opening the same **empty** file at once: both succeed,
+    and each table exists once, at version 1.
 
 The integration suite does not change.
 
@@ -487,7 +539,7 @@ Small PRs, each with its own tests, in this order:
    model columns.
 2. **Server:** label and icon validation in `registry.py`, the `/version`
    features, the `/devices` fields, the `/display` route, lenient `kind` in
-   heartbeat, the Label column in `frp-jump-server devices list` and
+   heartbeat, the Device label column in `frp-jump-server devices list` and
    `users show`.
 3. **Client CLI:** `devices label`, `devices icon`, the new `devices list`
    columns, and the old-server message.

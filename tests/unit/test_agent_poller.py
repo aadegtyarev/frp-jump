@@ -8,8 +8,15 @@ import pytest
 
 from frp_jump.agent import poller
 from frp_jump.agent.state import AgentState, Profile, load
+from frp_jump.common.device_display import DeviceIcon
 
 _PORT_RANGE = range(40000, 40010)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_kind_detection(monkeypatch):
+    """run_forever detects the device kind at start; never read the real /sys here."""
+    monkeypatch.setattr(poller, "detect_kind", lambda: DeviceIcon.SBC)
 
 
 def _state(**overrides) -> AgentState:
@@ -59,6 +66,47 @@ def test_send_heartbeat_posts_to_control_url_with_bearer_auth(monkeypatch) -> No
     assert captured["url"] == "https://ctl.example.com/api/agent/heartbeat"
     assert captured["headers"]["Authorization"] == "Bearer tok"
     assert captured["json"] == {"agent_version": "1.0"}
+
+
+def test_send_heartbeat_includes_kind_when_known(monkeypatch) -> None:
+    captured = {}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured.update(json=json)
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    poller.send_heartbeat(_state(), agent_version="1.0", kind=DeviceIcon.WIRENBOARD)
+
+    assert captured["json"] == {"agent_version": "1.0", "kind": "wirenboard"}
+
+
+def test_heartbeat_with_kind_is_accepted_by_an_old_server(monkeypatch) -> None:
+    """A 0.3.x server's HeartbeatRequest has no ``kind``; pydantic's default
+    extra="ignore" must drop it rather than answer 422."""
+    from fastapi import FastAPI, status
+    from fastapi.testclient import TestClient
+    from pydantic import BaseModel
+
+    class OldHeartbeatRequest(BaseModel):  # verbatim from v0.3.9 server/api.py
+        agent_version: str | None = None
+
+    received = []
+    app = FastAPI()
+
+    @app.post("/api/agent/heartbeat", status_code=status.HTTP_204_NO_CONTENT)
+    def heartbeat(body: OldHeartbeatRequest) -> None:
+        received.append(body)
+
+    test_client = TestClient(app)
+
+    def fake_post(url, *, json, headers, timeout):
+        return test_client.post("/api/agent/heartbeat", json=json, headers=headers)
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    poller.send_heartbeat(_state(), agent_version="0.4.0", kind=DeviceIcon.SBC)
+
+    assert received == [OldHeartbeatRequest(agent_version="0.4.0")]
 
 
 def test_send_heartbeat_raises_sync_error_on_non_204(monkeypatch) -> None:
@@ -532,6 +580,48 @@ def test_run_forever_only_revalidates_ports_on_the_first_successful_cycle(
             port_range=_PORT_RANGE,
         )
     assert seen_revalidate == [True, False, False]
+
+
+def test_run_forever_detects_the_kind_once_and_sends_it_every_cycle(
+    tmp_path, monkeypatch
+) -> None:
+    state = _state()
+    detections = []
+    sent_kinds = []
+
+    def fake_detect_kind():
+        detections.append(1)
+        return DeviceIcon.LAPTOP
+
+    def fake_post(url, *, json, headers, timeout):
+        sent_kinds.append(json.get("kind"))
+        if len(sent_kinds) >= 3:
+            raise SystemExit("stop the test")
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    def fake_get(url, *, headers, timeout):
+        return httpx.Response(
+            200,
+            json={"exposed": [], "consumed": [], "protocol_version": poller.PROTOCOL_VERSION},
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(poller, "detect_kind", fake_detect_kind)
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    monkeypatch.setattr(poller.httpx, "get", fake_get)
+    monkeypatch.setattr(poller.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(SystemExit):
+        poller.run_forever(
+            state,
+            FakeDriver(),
+            data_dir=tmp_path,
+            ssh_config_path=tmp_path / "ssh_config_real",
+            poll_interval_seconds=0,
+            port_range=_PORT_RANGE,
+        )
+    assert len(detections) == 1
+    assert sent_kinds == ["laptop", "laptop", "laptop"]
 
 
 def test_add_device_posts_and_returns_the_issued_token(monkeypatch) -> None:

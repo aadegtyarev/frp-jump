@@ -591,6 +591,7 @@ def test_every_mutating_route_rejects_a_disabled_caller_device(client, app_ctx) 
         ("post", "/api/agent/devices/wb01/delete", None),
         ("post", "/api/agent/devices/wb01/disable", None),
         ("post", "/api/agent/devices/laptop/enable", None),
+        ("post", "/api/agent/devices/wb01/display", {"label": "x"}),
         (
             "post",
             "/api/agent/disconnect",
@@ -840,3 +841,174 @@ def test_set_key_rejects_a_signature_from_a_different_key_than_challenged(
         headers=_auth(wb01["api_token"]),
     )
     assert resp.status_code == 400
+
+
+# --- device label and icon -------------------------------------------------
+
+
+def test_version_advertises_device_display(client) -> None:
+    body = client.get("/api/agent/version").json()
+    assert "device-display" in body["features"]
+
+
+def _enroll_two(client, engine) -> tuple[dict, dict]:
+    wb01 = client.post(
+        "/api/agent/enroll", json={"token": _make_admin_and_token(engine, "wb01")}
+    ).json()
+    laptop = client.post(
+        "/api/agent/enroll", json={"token": _make_admin_and_token(engine, "laptop")}
+    ).json()
+    return wb01, laptop
+
+
+def test_list_devices_items_have_label_icon_and_kind(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    wb01, _laptop = _enroll_two(client, engine)
+
+    devices = client.get("/api/agent/devices", headers=_auth(wb01["api_token"])).json()
+    for d in devices:
+        assert d["label"] is None
+        assert d["icon"] is None
+        assert d["kind"] is None
+
+
+def test_display_partial_updates(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    _wb01, laptop = _enroll_two(client, engine)
+    headers = _auth(laptop["api_token"])
+    url = "/api/agent/devices/wb01/display"
+
+    def shown(resp):
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        return body["name"], body["label"], body["icon"]
+
+    assert shown(client.post(url, json={"label": "Щиток, гараж"}, headers=headers)) == (
+        "wb01",
+        "Щиток, гараж",
+        None,
+    )
+    assert shown(client.post(url, json={"icon": "router"}, headers=headers)) == (
+        "wb01",
+        "Щиток, гараж",
+        "router",
+    )
+    assert shown(client.post(url, json={"label": None}, headers=headers)) == (
+        "wb01",
+        None,
+        "router",
+    )
+    assert shown(client.post(url, json={"label": "Гараж", "icon": "camera"}, headers=headers)) == (
+        "wb01",
+        "Гараж",
+        "camera",
+    )
+    assert shown(client.post(url, json={"label": ""}, headers=headers)) == ("wb01", None, "camera")
+    assert shown(client.post(url, json={"icon": None}, headers=headers)) == ("wb01", None, None)
+
+    devices = client.get("/api/agent/devices", headers=headers).json()
+    wb01 = next(d for d in devices if d["name"] == "wb01")
+    assert (wb01["label"], wb01["icon"]) == (None, None)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{}, {"unknown": "x"}, {"icon": "toaster"}, {"icon": "auto"}, {"label": "a\nb"}],
+    ids=["empty", "only-unknown-keys", "bad-icon", "auto-icon", "bad-label"],
+)
+def test_display_rejects_bad_bodies_with_400(client, app_ctx, body) -> None:
+    _app, engine, _ca = app_ctx
+    _wb01, laptop = _enroll_two(client, engine)
+
+    resp = client.post(
+        "/api/agent/devices/wb01/display", json=body, headers=_auth(laptop["api_token"])
+    )
+    assert resp.status_code == 400, resp.text
+
+
+def test_display_bad_icon_lists_the_allowed_values(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    _wb01, laptop = _enroll_two(client, engine)
+
+    resp = client.post(
+        "/api/agent/devices/wb01/display",
+        json={"icon": "auto"},
+        headers=_auth(laptop["api_token"]),
+    )
+    assert "linux, wirenboard" in resp.json()["detail"]
+
+
+def test_display_bad_label_returns_the_fixed_detail_text(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    _wb01, laptop = _enroll_two(client, engine)
+
+    resp = client.post(
+        "/api/agent/devices/wb01/display",
+        json={"label": "garage\n"},
+        headers=_auth(laptop["api_token"]),
+    )
+    assert resp.json()["detail"] == "label contains a line break or control character"
+
+
+def test_display_on_another_owners_device_is_404(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    wb01_token = _make_admin_and_token(engine, "wb01")
+    wb01 = client.post("/api/agent/enroll", json={"token": wb01_token}).json()
+    with make_session(engine) as db:
+        friend = _get_or_create_friend(db)
+        issued = registry.create_enroll_token(
+            db, device_name_hint="phone", created_by=friend.id, ttl=_TTL
+        )
+    client.post("/api/agent/enroll", json={"token": issued.token})
+
+    resp = client.post(
+        "/api/agent/devices/phone/display",
+        json={"label": "mine now"},
+        headers=_auth(wb01["api_token"]),
+    )
+    assert resp.status_code == 404
+
+
+def test_display_from_a_disabled_caller_is_403(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    _wb01, laptop = _enroll_two(client, engine)
+    with make_session(engine) as db:
+        registry.disable_device(db, laptop["device_id"])
+
+    resp = client.post(
+        "/api/agent/devices/wb01/display",
+        json={"label": "x"},
+        headers=_auth(laptop["api_token"]),
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "this device is disabled"
+
+
+def test_display_on_a_disabled_target_is_allowed(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    wb01, laptop = _enroll_two(client, engine)
+    with make_session(engine) as db:
+        registry.disable_device(db, wb01["device_id"])
+
+    resp = client.post(
+        "/api/agent/devices/wb01/display",
+        json={"label": "spare"},
+        headers=_auth(laptop["api_token"]),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["label"] == "spare"
+    assert resp.json()["enabled"] is False
+
+
+def test_heartbeat_stores_a_known_kind_and_ignores_an_unknown_one(client, app_ctx) -> None:
+    _app, engine, _ca = app_ctx
+    wb01, _laptop = _enroll_two(client, engine)
+    headers = _auth(wb01["api_token"])
+
+    resp = client.post("/api/agent/heartbeat", json={"kind": "wirenboard"}, headers=headers)
+    assert resp.status_code == 204
+    resp = client.post("/api/agent/heartbeat", json={"kind": "hologram"}, headers=headers)
+    assert resp.status_code == 204
+
+    devices = client.get("/api/agent/devices", headers=headers).json()
+    assert next(d for d in devices if d["name"] == "wb01")["kind"] == "wirenboard"

@@ -14,6 +14,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
+from rich.text import Text
 
 from frp_jump.common.settings import Settings
 from frp_jump.driver.base import RelayState
@@ -163,6 +164,12 @@ def _relayed_today(traffic_by_grant: dict[str, tuple[int, int]], grant_id: str) 
         return None
     bytes_in, bytes_out = traffic
     return f"relayed today: {_format_bytes(bytes_in)} in / {_format_bytes(bytes_out)} out"
+
+
+def _device_label_text(label: str | None) -> Text:
+    """A device label as a plain ``Text``. A str would go through Rich's
+    markup and ``:emoji:`` processing, and the label is owner-written."""
+    return Text(label if label is not None else "-")
 
 
 @app.command("init")
@@ -475,7 +482,12 @@ def users_show(label: str = typer.Argument(..., help="User label, from `users li
     for d in devices:
         status = "enabled" if d.enabled else "[yellow]disabled[/yellow]"
         last_seen = d.last_seen_at.isoformat() if d.last_seen_at else "never"
-        console.print(f"  [bold]{d.name}[/bold] -- {status}, last seen {last_seen}")
+        line = Text.from_markup(f"  [bold]{d.name}[/bold] -- {status}, last seen {last_seen}")
+        if d.label is not None:
+            # A Text object, never markup: the owner wrote this text.
+            line.append(" -- Device label: ")
+            line.append(_device_label_text(d.label))
+        console.print(line)
         exposed, consumed = grants_by_device[d.id]
         for g in exposed:
             traffic = _relayed_today(traffic_by_grant, g.grant_id)
@@ -556,6 +568,7 @@ def devices_list(
     traffic_by_grant = fetch_all_proxy_traffic(settings.frps_admin_port)
     table = Table()
     table.add_column("Name")
+    table.add_column("Device label")
     table.add_column("Owner")
     table.add_column("Status")
     table.add_column("Online")
@@ -582,7 +595,13 @@ def devices_list(
                 + (f" ({traffic})" if traffic else "")
             )
         table.add_row(
-            d.name, d.owner_label, status, online_text, last_seen, ", ".join(parts) or "—"
+            d.name,
+            _device_label_text(d.label),
+            d.owner_label,
+            status,
+            online_text,
+            last_seen,
+            ", ".join(parts) or "—",
         )
     console.print(table)
     console.print(

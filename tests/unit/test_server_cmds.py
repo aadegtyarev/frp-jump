@@ -279,3 +279,42 @@ def test_admin_command_reports_a_newer_database_and_exits_1(tmp_path, monkeypatc
 
     assert result.exit_code == 1
     assert "schema version 99 is newer than this frp-jump supports" in result.output
+
+
+def _device_with_label(db_session, label):
+    admin = _make_user(db_session)
+    issued = registry.create_enroll_token(
+        db_session, device_name_hint="wb01", created_by=admin.id, ttl=_TTL
+    )
+    enrolled = registry.redeem_enroll_token(db_session, issued.token, cert_serial="1")
+    registry.set_device_display(db_session, enrolled.device.id, label=label)
+    return admin
+
+
+@pytest.mark.parametrize("label", ["[red]x", ":warning:", "Щиток, гараж"])
+def test_devices_list_prints_the_device_label_literally(db_session, monkeypatch, label):
+    _device_with_label(db_session, label)
+    monkeypatch.setattr(
+        server_cmds, "_open_db", lambda settings: contextlib.nullcontext(db_session)
+    )
+    monkeypatch.setattr(server_cmds, "fetch_all_proxy_traffic", lambda admin_port: {})
+
+    result = runner.invoke(server_cmds.app, ["devices", "list"], env={"COLUMNS": "200"})
+
+    assert result.exit_code == 0, result.output
+    assert "Device label" in result.output
+    assert label in result.output
+
+
+@pytest.mark.parametrize("label", ["[red]x", ":warning:", "Щиток, гараж"])
+def test_users_show_prints_the_device_label_literally(db_session, monkeypatch, label):
+    admin = _device_with_label(db_session, label)
+    monkeypatch.setattr(
+        server_cmds, "_open_db", lambda settings: contextlib.nullcontext(db_session)
+    )
+    monkeypatch.setattr(server_cmds, "fetch_all_proxy_traffic", lambda admin_port: {})
+
+    result = runner.invoke(server_cmds.app, ["users", "show", admin.label], env={"COLUMNS": "200"})
+
+    assert result.exit_code == 0, result.output
+    assert f"Device label: {label}" in result.output

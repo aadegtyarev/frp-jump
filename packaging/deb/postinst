@@ -1,0 +1,43 @@
+#!/bin/sh
+# postinst for frp-jump-client. build.sh copies this into DEBIAN/postinst.
+set -e
+
+PACKAGE=frp-jump-client
+SITE_PACKAGES=/opt/frp-jump-client/site-packages
+
+# Remove every *.dist-info under the bundled site-packages that this package
+# does not ship. dpkg only replaces files it owns; metadata written there by
+# anything else (a hand-run `pip install --target`, a dev build copied over)
+# survives every upgrade, and importlib.metadata may then report its stale
+# version instead of the packaged one -- the agent sent 0.3.15.dev0 as its
+# agent_version on 0.3.19 for exactly this reason.
+remove_unowned_dist_info() {
+    # An empty or failed listing would make every dist-info look unowned;
+    # skip the cleanup rather than delete the packaged metadata too.
+    owned=$(dpkg-query -L "$PACKAGE" 2>/dev/null) || return 0
+    [ -n "$owned" ] || return 0
+    for path in "${DPKG_ROOT:-}$SITE_PACKAGES"/*.dist-info; do
+        [ -d "$path" ] || continue
+        name=${path##*/}
+        if ! printf '%s\n' "$owned" | grep -qxF "$SITE_PACKAGES/$name"; then
+            echo "$PACKAGE: removing stale $SITE_PACKAGES/$name" >&2
+            rm -rf "$path"
+        fi
+    done
+}
+
+if [ "$1" = "configure" ]; then
+    remove_unowned_dist_info
+    systemctl daemon-reload || true
+    # On upgrade, restart the agent only if it is running now, so it picks up
+    # the new code; never start a stopped or never-installed one. Only the
+    # system unit: a `install-service --user` unit belongs to that user's
+    # manager. deb-systemd-invoke also honours policy-rc.d (chroots, images).
+    if [ -n "$2" ]; then
+        if command -v deb-systemd-invoke >/dev/null 2>&1; then
+            deb-systemd-invoke try-restart "$PACKAGE.service" || true
+        else
+            systemctl try-restart "$PACKAGE.service" || true
+        fi
+    fi
+fi

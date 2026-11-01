@@ -68,13 +68,7 @@ Description: frp-jump tunnel agent (self-contained)
 Homepage: https://github.com/aadegtyarev/frp-jump
 EOF
 
-cat > "$STAGING/DEBIAN/postinst" <<'EOF'
-#!/bin/sh
-set -e
-if [ "$1" = "configure" ]; then
-    systemctl daemon-reload || true
-fi
-EOF
+cp "$SCRIPT_DIR/postinst" "$STAGING/DEBIAN/postinst"
 
 cat > "$STAGING/DEBIAN/postrm" <<'EOF'
 #!/bin/sh

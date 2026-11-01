@@ -33,6 +33,18 @@ sudo apt install frp-jump-client
 
 New releases then arrive with your normal `apt upgrade`.
 
+An upgrade restarts the agent's system service if it is running, so the new
+version takes over right away. A stopped agent stays stopped, and a per-user
+service (`install-service --user`) is left alone: restart it yourself with
+`systemctl --user restart frp-jump-client`. The restart drops every tunnel on
+the machine for a few seconds, including the ssh session you may be upgrading
+it through. Run the upgrade inside tmux, or with `nohup`, so it finishes
+anyway.
+
+The upgrade also removes any `*.dist-info` metadata under
+`/opt/frp-jump-client/site-packages` that the package doesn't ship. That
+directory belongs to the package. Don't `pip install` into it.
+
 Only the client is packaged this way. Install the server side with pip.
 
 ## pip

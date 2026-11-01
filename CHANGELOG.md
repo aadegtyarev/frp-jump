@@ -6,6 +6,17 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+### Fixed
+
+- The `frp-jump-client` Debian package removes distribution metadata
+  (`*.dist-info`) under `/opt/frp-jump-client/site-packages` that it doesn't
+  ship. A leftover `frp_jump-0.3.15.dev0.dist-info`, written there outside
+  dpkg, survived every upgrade and made the agent report 0.3.15.dev0 as its
+  version.
+- Upgrading the Debian package restarts a running agent, so the new version
+  takes over without a manual `systemctl restart`. A stopped agent and per-user
+  services are left alone. See [Installation](docs/install.md#apt-repository).
+
 ## [0.3.19] - 2026-11-01
 
 ### Added

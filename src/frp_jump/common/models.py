@@ -136,6 +136,12 @@ class Device(SQLModel, table=True):
     last_seen_at: datetime.datetime | None = None
     agent_version: str | None = None
     enabled: bool = True
+    # Added by schema migration 1 (server/migrations.py). Owner-written
+    # free text, display only; an icon override; the kind the device
+    # reports about itself. Null means unset / automatic / unknown.
+    label: str | None = None
+    icon: str | None = None
+    kind: str | None = None
 
 
 class EnrollToken(SQLModel, table=True):

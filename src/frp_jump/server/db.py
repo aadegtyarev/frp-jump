@@ -6,10 +6,12 @@ from pathlib import Path
 
 from sqlalchemy import event
 from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, create_engine
 
-# Force model registration with SQLModel.metadata before create_all().
+# Force model registration with SQLModel.metadata before the migration
+# runner creates the tables.
 from frp_jump.common import models as _models  # noqa: F401
+from frp_jump.server.migrations import migrate_file, migrate_shared
 
 
 def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
@@ -22,7 +24,11 @@ def _enable_foreign_keys(dbapi_connection, connection_record) -> None:
 
 
 def make_engine(path: Path | str = ":memory:"):
-    """Create the engine and ensure the schema exists.
+    """Create the engine and bring the schema to the current version.
+
+    Raises ``migrations.MigrationError`` when the schema cannot be
+    upgraded (not writable, busy for longer than the lock timeout, or
+    newer than this code).
 
     ``:memory:`` uses ``StaticPool`` so every connection shares the same
     database -- without it, each new connection (e.g. from a different
@@ -38,7 +44,14 @@ def make_engine(path: Path | str = ":memory:"):
     else:
         engine = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False})
     event.listen(engine, "connect", _enable_foreign_keys)
-    SQLModel.metadata.create_all(engine)
+    if path == ":memory:":
+        raw = engine.raw_connection()
+        try:
+            migrate_shared(raw.driver_connection)
+        finally:
+            raw.close()
+    else:
+        migrate_file(path)
     return engine
 
 

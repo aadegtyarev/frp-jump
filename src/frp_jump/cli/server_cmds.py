@@ -12,6 +12,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from frp_jump.common.settings import Settings
@@ -36,6 +37,7 @@ try:
     from frp_jump.server import bootstrap, registry, service_install
     from frp_jump.server.app import create_app
     from frp_jump.server.db import Session, make_engine, make_session
+    from frp_jump.server.migrations import MigrationError
     from frp_jump.server.relay_policy import RelayPolicyServer
 except ModuleNotFoundError as exc:
     print(
@@ -83,8 +85,16 @@ def _main(
     pass
 
 
+def _make_engine(settings: Settings):
+    try:
+        return make_engine(bootstrap.db_path(settings))
+    except MigrationError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(1) from exc
+
+
 def _open_db(settings: Settings) -> Session:
-    return make_session(make_engine(bootstrap.db_path(settings)))
+    return make_session(_make_engine(settings))
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -206,7 +216,7 @@ def run() -> None:
         state_dir=settings.data_dir / "relay",
         admin_port=settings.frps_admin_port,
     )
-    engine = make_engine(bootstrap.db_path(settings))
+    engine = _make_engine(settings)
     web_app = create_app(settings=settings, engine=engine, ca=ca)
 
     has_tls = bool(settings.tls_cert_file and settings.tls_key_file)

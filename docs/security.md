@@ -35,6 +35,7 @@ Three separate mechanisms, each doing one job:
 | Device to relay | mTLS with your own CA | The channel that actually carries traffic |
 | Device to control plane | A per-device bearer token over HTTPS | Metadata: enroll, heartbeat, "what should I do" |
 | Device to device | A per-connection shared secret | One pair's tunnel, in frp itself |
+| Owner to device labels | Server-side validation on `POST /api/agent/devices/{name}/display`; plain-text rendering | Terminals and device lists, from escapes, broken rows and reordered text in a label |
 
 The strongest mechanism guards the traffic-carrying channel. The control plane
 moves only metadata, and its compromise does not by itself let anyone read a
@@ -98,6 +99,35 @@ device you don't own and you get "not found", not "forbidden" — the answer is
 the same whether the name belongs to a stranger or to nobody. Since names are
 unique per owner rather than globally, your own devices are the only namespace
 you can observe at all.
+
+## Device labels
+
+A device label is free text the owner writes, so the server treats it as
+untrusted input. Only the owner's own devices and the admin's CLI on the server
+ever see it.
+
+- Labels and icon overrides are set through `POST
+  /api/agent/devices/{name}/display`. The caller must be an enabled device, and
+  the target must belong to the same owner, or the answer is "not found". A
+  disabled device's token cannot change them. The target itself may be
+  disabled.
+- The server validates every label before storing it. It refuses a label over
+  256 characters as received, before any other work. It normalises the text to
+  NFC and refuses line breaks and control characters, and invisible or
+  formatting characters, the bidi controls among them; zero-width joiners stay
+  allowed, for emoji. It then strips surrounding whitespace, and refuses a label
+  with no visible character or longer than 64 characters. A label is refused,
+  never silently cut or cleaned.
+- A label is for display only. It never reaches an frp proxy or visitor name,
+  `~/.ssh/config`, `/etc/hosts`, a file path, a shell command or a URL. Device
+  names keep that job, with their strict character set.
+- The CLIs print labels as plain `rich.text.Text`, so Rich's markup and
+  `:emoji:` codes in a label are printed literally.
+- An icon override must be one of the built-in values. The kind a device
+  reports in its heartbeat is stored only when it is one of those values, and
+  ignored otherwise.
+- The server does not log labels or label changes, and does not rate-limit
+  them; see [Known weak spots](#known-weak-spots).
 
 ## The local frpc admin API
 
@@ -222,8 +252,8 @@ upstream release, because whoever can tamper with one response can tamper with
 both. Pinning per-architecture digests in configuration would fix this and is
 not done today.
 
-**Nothing is rate-limited.** An enrolled device can mint enroll tokens and
-create connections without a cap. Given that it is spending rows in its own
+**Nothing is rate-limited.** An enrolled device can mint enroll tokens, create
+connections and change device labels and icons without a cap. Given that it is spending rows in its own
 owner's database, on your own server, this is accepted rather than defended
 against.
 

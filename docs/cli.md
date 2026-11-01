@@ -25,7 +25,7 @@ which is more detailed than the summaries here.
 | [`doctor`](#doctor) | Check the basics when something is wrong |
 | [`connect`](#connect) | Use a port on another of your devices |
 | [`disconnect`](#disconnect) | Tear that back down |
-| [`devices`](#devices) | Add, list, delete, disable your own devices |
+| [`devices`](#devices) | Add, list, label, delete, disable your own devices |
 | [`profiles`](#profiles) | Manage local connection shortcuts |
 | [`set-key`](#set-key) | Rotate your own SSH key |
 | [`set-p2p`](#set-p2p) | Turn peer-to-peer off for this device |
@@ -147,6 +147,9 @@ cleaning up a connection you left running on a machine you are not at.
 ```
 frp-jump-client devices add-token [--name NAME] [--qr]
 frp-jump-client devices list
+frp-jump-client devices label NAME TEXT
+frp-jump-client devices label NAME --clear
+frp-jump-client devices icon NAME ICON|auto
 frp-jump-client devices delete NAME [--yes]
 frp-jump-client devices disable NAME
 frp-jump-client devices enable NAME
@@ -162,6 +165,40 @@ enroll line as a QR code in the terminal, for the Android app to scan.
 `disable` is reversible and takes effect on the target's next poll: its tunnels
 go away, and its token stops working for anything that changes state. `delete`
 is permanent, and frees the name for reuse.
+
+`list` shows each device's name, device label, icon, status, whether it is
+online, and when it was last seen. The Device label column shows `-` when no
+label is set. The Icon column shows `router` when you chose that icon,
+`wirenboard (auto)` when it is the kind the device reports about itself, and `-`
+when there is neither, or the server is too old to know about icons.
+
+`label` sets a free-text label shown next to the device's name. It is for
+display only: the name stays as it is and keeps doing its job in ssh aliases and
+tunnels. `TEXT` is one argument, so quote it if it has spaces, and put `--`
+before it if it starts with `-`. `--clear` removes the label; giving both
+`TEXT` and `--clear`, or neither, is a usage error. The server refuses a label
+longer than 64 characters, or one with line breaks, control characters,
+invisible or formatting characters, or nothing visible in it, and the command
+prints its reason.
+
+`icon` overrides the icon the device detects itself. `ICON` is one of `linux`,
+`wirenboard`, `server`, `pc`, `laptop`, `router`, `sbc`, `camera`, `home` and
+`phone`. `auto` drops your choice and goes back to the detected one.
+[How it works](how-it-works.md#device-labels-and-icons) explains where icons
+come from.
+
+Both commands first check that the server supports labels and icons. If it does
+not, they print "this server does not support device labels yet; upgrade
+frp-jump on the server" and exit 1. On success they print the device's row in
+the `list` format. Labels and icons are stored on the server, so all your
+devices see the same values.
+
+```sh
+frp-jump-client devices label wb01 "Щиток, гараж"
+frp-jump-client devices label wb01 -- "-48 V, щит"
+frp-jump-client devices icon wb01 router
+frp-jump-client devices icon wb01 auto
+```
 
 ## profiles
 
@@ -271,6 +308,7 @@ action a new person needs; every device after their first is self-service.
 
 `set-key` is the recovery path for someone who lost their key. `show` lists that
 person's devices and connections, including a compact relayed-traffic figure.
+A device with a label shows it after its last-seen time, as `Device label: …`.
 
 `delete` removes the person and every device they own. Not reversible.
 
@@ -286,6 +324,10 @@ frp-jump-server devices enable NAME --user LABEL
 The same operations users have, but across everyone. `--user` is mandatory on
 the mutating ones, because device names are unique per owner — two people can
 both have a `laptop`.
+
+`list` has a read-only Device label column with the label each owner set, or
+`-`. There is no admin command to set a label; owners set them from their own
+devices.
 
 ## enroll-tokens
 

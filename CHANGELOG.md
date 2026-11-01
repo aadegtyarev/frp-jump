@@ -6,6 +6,50 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+### Added
+
+- **Device labels and icons.** Each device can carry a free-text label such as
+  «Щиток, гараж», up to 64 characters, shown next to its name, and an icon from
+  a built-in set. Both are stored on the server, so every device of the owner
+  sees the same values. `frp-jump-client devices label NAME TEXT` sets a label,
+  `devices label NAME --clear` removes it, `devices icon NAME ICON` overrides
+  the icon and `devices icon NAME auto` drops the override. Against an older
+  server both commands say the server needs an upgrade and exit 1. See
+  [How it works](docs/how-it-works.md#device-labels-and-icons).
+- The agent detects what kind of machine it runs on (Wiren Board, OpenWrt
+  router, server, desktop, laptop, single-board computer, or plain Linux) when
+  it starts, and reports it in every heartbeat. The owner's icon override
+  always wins over it.
+- `frp-jump-client devices list` gains Device label and Icon columns. A
+  detected icon is shown as, say, `wirenboard (auto)`. `frp-jump-server devices
+  list` gains a read-only Device label column, and `users show` prints a
+  device's label when it has one.
+- The API's `GET /version` answer lists optional `features`; this release
+  advertises `device-display`. `GET /devices` items gain `label`, `icon` and
+  `kind`, a new `POST /devices/{name}/display` route sets the label and icon,
+  and heartbeat accepts an optional `kind`. The protocol version stays 1, so
+  older agents and apps keep working.
+
+### Changed
+
+- **The server database now has a schema version, and upgrades itself.** The
+  first start of this release, or the first admin command, adds three columns
+  to the `devices` table and records schema version 1. Back up the database
+  file before upgrading the server. If the file is not writable by the user
+  running the command, the command says so and exits 1; run it as the service
+  account, or start the service once. A database from a newer release is
+  refused rather than guessed at. Rolling back to 0.3.x still works: it ignores
+  the new columns. See
+  [Internals](docs/architecture.md#schema-changes-go-through-a-versioned-migration-runner).
+
+### Security
+
+- Device labels are owner-written text, validated on the server: control
+  characters, line breaks, bidi and other invisible or formatting characters
+  are refused, and so is a label with nothing visible in it. Labels are for
+  display only and are printed as plain text, never as Rich markup. See
+  [Security model](docs/security.md#device-labels).
+
 ## [0.3.18] - 2026-10-31
 
 ### Changed

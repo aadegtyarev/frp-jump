@@ -125,11 +125,53 @@ the binary at all (`_world_traversable` — a venv under a `0750` home directory
 increasingly common on newer distros). An explicit `--system-user` fails loudly
 instead, because that one is a deliberate request.
 
+### Schema changes go through a versioned migration runner
+
+`SQLModel.metadata.create_all` creates missing tables but never adds a column to
+an existing one. So `server/db.make_engine` does not call it. It runs
+`server/migrations.py` instead, before it returns the engine. Every entry point
+that touches the database goes through `make_engine`: `run`, `init` and
+`install-service` through `bootstrap`, and every admin command through
+`_open_db`.
+
+The version lives in a `schema_version` table: one row, one integer. A missing
+table or row is version 0, the 0.3.x schema. `MIGRATIONS` is an ordered list of
+`(version, function)` pairs. Migration 1 adds `label`, `icon` and `kind` to
+`devices`. Each step reads `PRAGMA table_info` and adds only the columns that
+are missing, so it is idempotent.
+
+The runner uses a raw `sqlite3` connection with `isolation_level=None` and a
+10 s timeout, so every `BEGIN`, `COMMIT` and `ROLLBACK` is its own. For
+`:memory:` it borrows the engine's one shared connection instead, since a new
+one would be a different, empty database.
+
+1. It reads the version. If it is current, it returns without writing, so an
+   up-to-date database never needs write access.
+2. Otherwise it takes SQLite's write lock with `BEGIN IMMEDIATE`, reads the
+   version again (another process may have just migrated), creates the model's
+   tables and indexes, applies the pending steps, records the version and
+   commits. Any error rolls the whole thing back.
+
+The tables are created inside that lock, with `CreateTable` and `CreateIndex`
+compiled with `if_not_exists`, not with `create_all`, which would commit a
+transaction of its own and drop the lock early. Two processes starting on an
+empty file therefore cannot both create the same tables. It also means a future
+release that adds a table must bump the version too: tables are only created
+while a migration is pending.
+
+The runner stops with a `MigrationError`, which the CLI prints before exiting 1,
+in three cases: a pending migration on a file this user cannot write, the lock
+not obtained within 10 s ("the database is busy; another frp-jump process holds
+it; retry"), and a schema version newer than the code knows. It never guesses
+its way through a schema it does not know. A 0.3.x server has no runner, names
+the columns it selects, and so ignores both the new columns and the table.
+
 ### Accepted, not enforced
 
 Nothing rate-limits how many enroll tokens a device mints, or how many services
-and grants it creates. The threat model is an already-authenticated device
-spending rows in its own owner's database on your own server. A limit here would
+and grants it creates, or how often it changes a device label or icon. The
+threat model is an already-authenticated device spending rows in its own
+owner's database on your own server. A limit here would
 only inconvenience an already-trusted party being unusually hostile.
 
 ## Gotchas

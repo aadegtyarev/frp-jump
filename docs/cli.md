@@ -177,9 +177,9 @@ display only: the name stays as it is and keeps doing its job in ssh aliases and
 tunnels. `TEXT` is one argument, so quote it if it has spaces, and put `--`
 before it if it starts with `-`. `--clear` removes the label; giving both
 `TEXT` and `--clear`, or neither, is a usage error. The server refuses a label
-longer than 64 characters, or one with line breaks, control characters,
-invisible or formatting characters, or nothing visible in it, and the command
-prints its reason.
+longer than 64 characters, or one with line breaks, control characters
+or invisible or formatting characters, and the command prints its reason. A
+label of spaces only clears it, like `--clear`.
 
 `icon` overrides the icon the device detects itself. `ICON` is one of `linux`,
 `wirenboard`, `server`, `pc`, `laptop`, `router`, `sbc`, `camera`, `home` and

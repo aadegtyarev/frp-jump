@@ -115,8 +115,9 @@ ever see it.
   256 characters as received, before any other work. It normalises the text to
   NFC and refuses line breaks and control characters, and invisible or
   formatting characters, the bidi controls among them; zero-width joiners stay
-  allowed, for emoji. It then strips surrounding whitespace, and refuses a label
-  with no visible character or longer than 64 characters. A label is refused,
+  allowed, for emoji. It then strips surrounding whitespace (a label of spaces
+  only clears it), and refuses one left with no visible character or longer
+  than 64 characters. A label is refused,
   never silently cut or cleaned.
 - A label is for display only. It never reaches an frp proxy or visitor name,
   `~/.ssh/config`, `/etc/hosts`, a file path, a shell command or a URL. Device

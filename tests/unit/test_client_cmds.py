@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from frp_jump.agent import poller
@@ -438,6 +439,193 @@ def test_devices_list_shows_a_recently_seen_device_as_online(tmp_path, monkeypat
 
     assert result.exit_code == 0, result.output
     assert "online" in result.output
+
+
+def _wide_console(monkeypatch):
+    # Keep every table cell on one line, so asserts see whole values.
+    monkeypatch.setattr(client_cmds, "console", Console(width=200))
+
+
+def test_devices_list_prints_labels_literally(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    _wide_console(monkeypatch)
+    monkeypatch.setattr(
+        poller,
+        "list_devices",
+        lambda state: [
+            {"name": "wb01", "enabled": True, "last_seen_at": None, "label": "[red]x",
+             "icon": None, "kind": None},
+            {"name": "wb02", "enabled": True, "last_seen_at": None, "label": ":warning:",
+             "icon": None, "kind": None},
+        ],
+    )
+
+    result = runner.invoke(client_cmds.app, ["devices", "list"])
+
+    assert result.exit_code == 0, result.output
+    assert "[red]x" in result.output
+    assert ":warning:" in result.output
+
+
+def test_devices_list_shows_the_icon_override_or_the_detected_kind(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    _wide_console(monkeypatch)
+    monkeypatch.setattr(
+        poller,
+        "list_devices",
+        lambda state: [
+            {"name": "wb01", "enabled": True, "last_seen_at": None, "label": None,
+             "icon": "router", "kind": "wirenboard"},
+            {"name": "wb02", "enabled": True, "last_seen_at": None, "label": None,
+             "icon": None, "kind": "wirenboard"},
+        ],
+    )
+
+    result = runner.invoke(client_cmds.app, ["devices", "list"])
+
+    assert result.exit_code == 0, result.output
+    rows = {line.split()[1]: line for line in result.output.splitlines() if "wb0" in line}
+    assert "router" in rows["wb01"] and "(auto)" not in rows["wb01"]
+    assert "wirenboard (auto)" in rows["wb02"]
+
+
+def test_devices_list_shows_dashes_for_an_old_server(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    _wide_console(monkeypatch)
+    # An old server's items have no label/icon/kind keys at all.
+    monkeypatch.setattr(
+        poller,
+        "list_devices",
+        lambda state: [{"name": "wb01", "enabled": True, "last_seen_at": None}],
+    )
+
+    result = runner.invoke(client_cmds.app, ["devices", "list"])
+
+    assert result.exit_code == 0, result.output
+    row = next(line for line in result.output.splitlines() if "wb01" in line)
+    assert row.split()[1:5] == ["wb01", "│", "-", "│"]
+    assert row.split()[5:7] == ["-", "│"]
+
+
+def _display_server(monkeypatch, *, features=("device-display",), result=None):
+    """Fake a server with (or without) the device-display feature; returns
+    the list the bodies sent to /display are recorded in."""
+    sent = []
+    info = {"protocol_version": 1, "package_version": "0.4.0"}
+    if features is not None:
+        info["features"] = list(features)
+    monkeypatch.setattr(poller, "fetch_server_version", lambda state: info)
+
+    def fake_set(state, name, changes):
+        sent.append((name, changes))
+        row = {"name": name, "enabled": True, "last_seen_at": None,
+               "label": None, "icon": None, "kind": None}
+        row.update(result or {})
+        return row
+
+    monkeypatch.setattr(poller, "set_device_display", fake_set)
+    return sent
+
+
+def test_devices_label_sets_the_text_and_prints_the_row(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    _wide_console(monkeypatch)
+    sent = _display_server(monkeypatch, result={"label": "Щиток, гараж"})
+
+    result = runner.invoke(client_cmds.app, ["devices", "label", "wb01", "Щиток, гараж"])
+
+    assert result.exit_code == 0, result.output
+    assert sent == [("wb01", {"label": "Щиток, гараж"})]
+    assert "Щиток, гараж" in result.output
+
+
+def test_devices_label_clear_sends_null(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    sent = _display_server(monkeypatch)
+
+    result = runner.invoke(client_cmds.app, ["devices", "label", "wb01", "--clear"])
+
+    assert result.exit_code == 0, result.output
+    assert sent == [("wb01", {"label": None})]
+
+
+def test_devices_label_accepts_text_starting_with_a_dash_after_double_dash(
+    tmp_path, monkeypatch
+):
+    _enrolled_state(tmp_path)
+    sent = _display_server(monkeypatch)
+
+    result = runner.invoke(client_cmds.app, ["devices", "label", "wb01", "--", "-48 V, щит"])
+
+    assert result.exit_code == 0, result.output
+    assert sent == [("wb01", {"label": "-48 V, щит"})]
+
+
+@pytest.mark.parametrize(
+    "args", [["wb01"], ["wb01", "garage", "--clear"]], ids=["neither", "both"]
+)
+def test_devices_label_needs_exactly_one_of_text_and_clear(tmp_path, monkeypatch, args):
+    _enrolled_state(tmp_path)
+    sent = _display_server(monkeypatch)
+
+    result = runner.invoke(client_cmds.app, ["devices", "label", *args])
+
+    assert result.exit_code == 2, result.output
+    assert sent == []
+
+
+def test_devices_icon_sets_an_override(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    sent = _display_server(monkeypatch, result={"icon": "router"})
+
+    result = runner.invoke(client_cmds.app, ["devices", "icon", "wb01", "router"])
+
+    assert result.exit_code == 0, result.output
+    assert sent == [("wb01", {"icon": "router"})]
+    assert "router" in result.output
+
+
+def test_devices_icon_auto_sends_null_and_shows_a_dash_when_nothing_is_detected(
+    tmp_path, monkeypatch
+):
+    _enrolled_state(tmp_path)
+    _wide_console(monkeypatch)
+    sent = _display_server(monkeypatch)
+
+    result = runner.invoke(client_cmds.app, ["devices", "icon", "wb01", "auto"])
+
+    assert result.exit_code == 0, result.output
+    assert sent == [("wb01", {"icon": None})]
+    row = next(line for line in result.output.splitlines() if "wb01" in line)
+    # Name, Device label, Icon: both label and icon are "-".
+    assert row.split()[1:7] == ["wb01", "│", "-", "│", "-", "│"]
+
+
+def test_devices_icon_rejects_an_unknown_value_and_lists_the_set(tmp_path, monkeypatch):
+    _enrolled_state(tmp_path)
+    sent = _display_server(monkeypatch)
+
+    result = runner.invoke(client_cmds.app, ["devices", "icon", "wb01", "toaster"])
+
+    assert result.exit_code == 2, result.output
+    assert sent == []
+    assert "wirenboard" in result.output
+
+
+@pytest.mark.parametrize(
+    "args", [["label", "wb01", "garage"], ["icon", "wb01", "router"]], ids=["label", "icon"]
+)
+@pytest.mark.parametrize("features", [None, []], ids=["no-key", "empty"])
+def test_devices_display_commands_refuse_an_old_server(tmp_path, monkeypatch, args, features):
+    _enrolled_state(tmp_path)
+    sent = _display_server(monkeypatch, features=features)
+
+    result = runner.invoke(client_cmds.app, ["devices", *args])
+
+    assert result.exit_code == 1, result.output
+    assert sent == []
+    assert "this server does not support device labels yet" in result.output
+    assert "upgrade frp-jump on the server" in result.output
 
 
 def test_is_recent_treats_a_naive_timestamp_as_utc():

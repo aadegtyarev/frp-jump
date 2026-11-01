@@ -16,11 +16,13 @@ import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from frp_jump.agent import enroll as enroll_mod
 from frp_jump.agent import hosts, poller, service_install
 from frp_jump.agent.state import Profile, load, request_wake, save
 from frp_jump.common.api import PROTOCOL_VERSION
+from frp_jump.common.device_display import FEATURE_DEVICE_DISPLAY, DeviceIcon
 from frp_jump.common.settings import Settings
 from frp_jump.driver.base import ServiceProtocol
 from frp_jump.driver.frp.binaries import ensure_installed
@@ -867,7 +869,8 @@ def disconnect_cmd(
 
 
 devices_app = typer.Typer(
-    help="Manage your own devices -- list, add via token, delete, disable/enable.",
+    help="Manage your own devices -- list, add via token, label, set an icon, "
+    "delete, disable/enable.",
     no_args_is_help=True,
 )
 app.add_typer(devices_app, name="devices")
@@ -957,6 +960,47 @@ def _is_recent(last_seen_at: str | None, *, threshold_seconds: float) -> bool:
     return age.total_seconds() <= threshold_seconds
 
 
+def _icon_cell(d: dict) -> Text:
+    """The effective icon: the owner's override as is, else what the device
+    reports, marked "(auto)", else "-". Read with ``.get`` so an old
+    server's answer, which has neither key, shows "-"."""
+    icon = d.get("icon")
+    if icon:
+        return Text(icon)
+    kind = d.get("kind")
+    if kind:
+        return Text(f"{kind} (auto)")
+    return Text("-")
+
+
+def _devices_table(devices: list[dict], settings: Settings, *, title: str | None) -> Table:
+    table = Table(title=title)
+    table.add_column("Name")
+    table.add_column("Device label")
+    table.add_column("Icon")
+    table.add_column("Status")
+    table.add_column("Online")
+    table.add_column("Last seen")
+    for d in devices:
+        status_text = "enabled" if d["enabled"] else "[yellow]disabled[/yellow]"
+        online = _is_recent(
+            d["last_seen_at"], threshold_seconds=settings.device_online_threshold_seconds
+        )
+        online_text = "[green]online[/green]" if online else "[dim]offline[/dim]"
+        # The label is owner-written free text: always a Text, so Rich
+        # applies no markup or :emoji: codes to it.
+        label = Text(d.get("label") or "-")
+        table.add_row(
+            d["name"],
+            label,
+            _icon_cell(d),
+            status_text,
+            online_text,
+            d["last_seen_at"] or "never",
+        )
+    return table
+
+
 @devices_app.command("list")
 def devices_list_cmd() -> None:
     """List every device you own (yours and any you've added).
@@ -972,20 +1016,93 @@ def devices_list_cmd() -> None:
     except poller.SyncError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
+    console.print(_devices_table(devices, settings, title="Your devices"))
 
-    table = Table(title="Your devices")
-    table.add_column("Name")
-    table.add_column("Status")
-    table.add_column("Online")
-    table.add_column("Last seen")
-    for d in devices:
-        status_text = "enabled" if d["enabled"] else "[yellow]disabled[/yellow]"
-        online = _is_recent(
-            d["last_seen_at"], threshold_seconds=settings.device_online_threshold_seconds
+
+def _require_device_display(state) -> None:
+    """Exit 1 unless the server advertises device labels and icons, so a
+    404 from the route itself can only mean "no such device"."""
+    try:
+        info = poller.fetch_server_version(state)
+    except poller.SyncError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    # An old server sends no "features" key at all.
+    if FEATURE_DEVICE_DISPLAY not in (info.get("features") or []):
+        console.print(
+            "[red]this server does not support device labels yet; "
+            "upgrade frp-jump on the server[/red]"
         )
-        online_text = "[green]online[/green]" if online else "[dim]offline[/dim]"
-        table.add_row(d["name"], status_text, online_text, d["last_seen_at"] or "never")
-    console.print(table)
+        raise typer.Exit(1)
+
+
+def _set_display(name: str, changes: dict[str, str | None]) -> None:
+    settings = Settings()
+    state = _require_state(settings)
+    _require_device_display(state)
+    try:
+        updated = poller.set_device_display(state, name, changes)
+    except poller.SyncError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(_devices_table([updated], settings, title=None))
+
+
+_ICON_CHOICES = ", ".join(icon.value for icon in DeviceIcon)
+
+
+@devices_app.command("label")
+def devices_label_cmd(
+    name: str = typer.Argument(..., help="Device name, from `devices list`."),
+    text: str | None = typer.Argument(
+        None,
+        help="The label, at most 64 characters. Quote it if it has spaces; "
+        "put `--` before it if it starts with `-`.",
+    ),
+    clear: bool = typer.Option(False, "--clear", help="Remove the label."),
+) -> None:
+    """Set or clear the free-text label shown next to one of your devices.
+    The label is for display only; the device name stays as it is.
+
+    Examples:
+
+        frp-jump-client devices label wb01 "Щиток, гараж"
+
+        frp-jump-client devices label wb01 -- "-48 V, щит"
+
+        frp-jump-client devices label wb01 --clear
+    """
+    if (text is None) == (not clear):
+        raise typer.BadParameter("give either TEXT or --clear, not both and not neither")
+    _set_display(name, {"label": None if clear else text})
+
+
+@devices_app.command("icon")
+def devices_icon_cmd(
+    name: str = typer.Argument(..., help="Device name, from `devices list`."),
+    icon: str = typer.Argument(
+        ...,
+        metavar="ICON|auto",
+        help=f"One of: {_ICON_CHOICES}. `auto` drops your choice and goes "
+        "back to the icon the device reports.",
+    ),
+) -> None:
+    """Override the icon of one of your devices, or go back to the one the
+    device detects itself with `auto`.
+
+    Examples:
+
+        frp-jump-client devices icon wb01 router
+
+        frp-jump-client devices icon wb01 auto
+    """
+    if icon == "auto":
+        value = None
+    elif icon in DeviceIcon:
+        value = icon
+    else:
+        raise typer.BadParameter(f"{icon!r} is not an icon; use one of: {_ICON_CHOICES}, auto")
+    _set_display(name, {"icon": value})
 
 
 @devices_app.command("delete")

@@ -1033,3 +1033,35 @@ def test_is_bindable_reports_an_in_use_port_as_not_bindable() -> None:
         assert poller.is_bindable(port) is False
     finally:
         blocker.close()
+
+
+def test_set_device_display_posts_only_the_given_fields(monkeypatch) -> None:
+    state = _state()
+    captured = {}
+    row = {"name": "laptop", "label": None, "icon": "router", "kind": None}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured.update(url=url, json=json)
+        return httpx.Response(200, json=row, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    result = poller.set_device_display(state, "laptop", {"icon": "router"})
+
+    assert captured["url"] == "https://ctl.example.com/api/agent/devices/laptop/display"
+    assert captured["json"] == {"icon": "router"}
+    assert result == row
+
+
+def test_set_device_display_raises_sync_error_with_the_server_reason(monkeypatch) -> None:
+    state = _state()
+
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(
+            400,
+            json={"detail": "label contains a line break or control character"},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    with pytest.raises(poller.SyncError, match="line break or control character"):
+        poller.set_device_display(state, "laptop", {"label": "a\nb"})

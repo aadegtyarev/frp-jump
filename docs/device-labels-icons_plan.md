@@ -130,9 +130,21 @@ table rows, or reordering text so that one device's row looks like another's.
 Cyrillic, punctuation, digits and emoji, including ZWJ sequences, are all
 allowed. Labels need not be unique: two devices may both be «Гараж».
 
-The error text names the rule that failed, for example "label is longer than 64
-characters", "label contains a line break or control character" or "label has
-no visible characters". The app shows it under the field.
+A rejected label gets a 400 whose `detail` is one of these fixed texts. There is
+exactly one text per failed rule, and the texts contain no variable parts, so
+clients can match the whole string. The app maps each one to a localised
+message and shows it under the field. Changing a text breaks that mapping, so
+these texts are part of the contract:
+
+| Rule | `detail` |
+| --- | --- |
+| 1, raw cap | `label is too long` |
+| 3, `Cc`, `Zl`, `Zp` | `label contains a line break or control character` |
+| 3, `Cf` (bidi controls included), `Co`, `Cs`, the blank fillers | `label contains an invisible or formatting character` |
+| 5, visible | `label has no visible characters` |
+| 6, length | `label is longer than 64 characters` |
+
+Rules 2 and 4 cannot fail.
 
 ## API
 

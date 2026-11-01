@@ -212,6 +212,157 @@ def test_record_heartbeat_updates_last_seen_and_version(db_session) -> None:
     assert enrolled.device.agent_version == "1.2.3"
 
 
+# --- device label and icon -----------------------------------------------
+
+
+def test_device_label_accepts_cyrillic_and_strips_surrounding_spaces() -> None:
+    assert registry.validate_device_label("  Щиток, гараж ") == "Щиток, гараж"
+
+
+def test_device_label_is_nfc_normalised() -> None:
+    assert registry.validate_device_label("Cafe\u0301") == "Caf\u00e9"
+
+
+def test_device_label_rejects_over_the_raw_cap_first() -> None:
+    # 257 newlines: over the raw cap, so that rule wins over rule 3.
+    with pytest.raises(registry.ValidationError) as exc:
+        registry.validate_device_label("\n" * 257)
+    assert str(exc.value) == "label is too long"
+
+
+def test_device_label_length_counts_code_points_after_nfc() -> None:
+    # 64 decomposed e-acute are 128 code points raw, 64 after NFC.
+    assert registry.validate_device_label("e\u0301" * 64) == "\u00e9" * 64
+    with pytest.raises(registry.ValidationError) as exc:
+        registry.validate_device_label("e\u0301" * 65)
+    assert str(exc.value) == "label is longer than 64 characters"
+
+
+def test_device_label_of_64_characters_is_accepted() -> None:
+    assert registry.validate_device_label("x" * 64) == "x" * 64
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["a\nb", "a\x1b[31mb", "a\tb", "a\x7fb", "a\u2028b", "a\u2029b", "garage\n"],
+    ids=["newline", "esc", "tab", "del", "line-sep", "para-sep", "trailing-newline"],
+)
+def test_device_label_rejects_line_breaks_and_control_characters(label) -> None:
+    with pytest.raises(registry.ValidationError) as exc:
+        registry.validate_device_label(label)
+    assert str(exc.value) == "label contains a line break or control character"
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "a\u202eb",  # right-to-left override
+        "a\u2066b",  # left-to-right isolate
+        "a\u200fb",  # right-to-left mark
+        "a\u061cb",  # Arabic letter mark
+        "a\u200bb",  # zero width space (Cf)
+        "a\ue000b",  # private use
+        "a\ud800b",  # lone surrogate
+    ],
+    ids=["rlo", "lri", "rlm", "alm", "zwsp", "private-use", "surrogate"],
+)
+def test_device_label_rejects_invisible_and_formatting_characters(label) -> None:
+    with pytest.raises(registry.ValidationError) as exc:
+        registry.validate_device_label(label)
+    assert str(exc.value) == "label contains an invisible or formatting character"
+
+
+@pytest.mark.parametrize("filler", ["\u3164", "\u115f", "\u1160", "\uffa0", "\u2800"])
+@pytest.mark.parametrize("template", ["{}", " {} "], ids=["alone", "between-spaces"])
+def test_device_label_rejects_blank_rendering_fillers(filler, template) -> None:
+    with pytest.raises(registry.ValidationError) as exc:
+        registry.validate_device_label(template.format(filler))
+    assert str(exc.value) == "label contains an invisible or formatting character"
+
+
+def test_device_label_accepts_a_zwj_emoji_sequence() -> None:
+    family = "\U0001f468\u200d\U0001f469\u200d\U0001f467"
+    assert registry.validate_device_label(f"Дом {family}") == f"Дом {family}"
+
+
+def test_device_label_accepts_the_emoji_presentation_selector() -> None:
+    assert registry.validate_device_label("\u2764\ufe0f") == "\u2764\ufe0f"
+
+
+@pytest.mark.parametrize("label", ["\u200d", "\u200d\u200c", "\u0301\u0301"])
+def test_device_label_rejects_only_joiners_or_marks(label) -> None:
+    with pytest.raises(registry.ValidationError) as exc:
+        registry.validate_device_label(label)
+    assert str(exc.value) == "label has no visible characters"
+
+
+@pytest.mark.parametrize("label", ["", "   ", "\u3000", None])
+def test_device_label_of_only_spaces_or_none_clears(label) -> None:
+    assert registry.validate_device_label(label) is None
+
+
+@pytest.mark.parametrize("label", ["[red]x", ":warning:"])
+def test_device_label_keeps_rich_markup_and_emoji_codes_as_text(label) -> None:
+    assert registry.validate_device_label(label) == label
+
+
+def test_set_device_display_sets_and_clears_label_and_icon(db_session) -> None:
+    admin = _make_user(db_session)
+    device_id = _enroll(db_session, admin, "wb01").device.id
+
+    device = registry.set_device_display(db_session, device_id, label=" Гараж ")
+    assert (device.label, device.icon) == ("Гараж", None)
+
+    device = registry.set_device_display(db_session, device_id, icon="router")
+    assert (device.label, device.icon) == ("Гараж", "router")
+
+    device = registry.set_device_display(db_session, device_id, label="   ")
+    assert (device.label, device.icon) == (None, "router")
+
+    device = registry.set_device_display(db_session, device_id, icon=None)
+    assert (device.label, device.icon) == (None, None)
+
+
+@pytest.mark.parametrize("icon", ["auto", "Router", "tablet", ""])
+def test_set_device_display_rejects_an_unknown_icon_listing_the_set(db_session, icon) -> None:
+    admin = _make_user(db_session)
+    device_id = _enroll(db_session, admin, "wb01").device.id
+
+    with pytest.raises(registry.ValidationError) as exc:
+        registry.set_device_display(db_session, device_id, icon=icon)
+    assert "linux, wirenboard, server, pc, laptop, router, sbc, camera, home, phone" in str(
+        exc.value
+    )
+
+
+def test_set_device_display_writes_nothing_when_one_field_is_invalid(db_session) -> None:
+    admin = _make_user(db_session)
+    device_id = _enroll(db_session, admin, "wb01").device.id
+
+    with pytest.raises(registry.ValidationError):
+        registry.set_device_display(db_session, device_id, label="Гараж", icon="auto")
+    device = registry.get_device(db_session, device_id)
+    assert (device.label, device.icon) == (None, None)
+
+
+def test_record_heartbeat_stores_a_known_kind(db_session) -> None:
+    admin = _make_user(db_session)
+    device = _enroll(db_session, admin, "wb01").device
+    registry.record_heartbeat(db_session, device, kind="wirenboard")
+    assert registry.get_device(db_session, device.id).kind == "wirenboard"
+
+
+@pytest.mark.parametrize("kind", ["toaster", None])
+def test_record_heartbeat_keeps_the_stored_kind_for_unknown_or_null(db_session, kind) -> None:
+    admin = _make_user(db_session)
+    device = _enroll(db_session, admin, "wb01").device
+    registry.record_heartbeat(db_session, device, kind="sbc")
+    registry.record_heartbeat(db_session, device, kind=kind)
+    stored = registry.get_device(db_session, device.id)
+    assert stored.kind == "sbc"
+    assert stored.last_seen_at is not None
+
+
 def test_create_service_rejects_duplicate_name(db_session) -> None:
     admin = _make_user(db_session)
     enrolled = _enroll(db_session, admin, "wb01")

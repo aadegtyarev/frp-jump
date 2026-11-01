@@ -12,7 +12,9 @@ import binascii
 import datetime
 import re
 import secrets
+import unicodedata
 from dataclasses import dataclass
+from typing import Final
 
 import sqlalchemy.exc
 from sqlalchemy import delete as sa_delete
@@ -23,6 +25,7 @@ from sqlmodel import Session, select
 
 from frp_jump.common import ssh_signing
 from frp_jump.common.crypto import generate_id, generate_token, hash_token
+from frp_jump.common.device_display import DeviceIcon
 from frp_jump.common.models import (
     Device,
     EnrollChallenge,
@@ -67,6 +70,105 @@ def validate_name(name: str, *, what: str) -> None:
             f"{what} {name!r} is invalid -- use 1-63 characters, "
             "letters/digits/underscore/hyphen, starting with a letter or digit"
         )
+
+
+# --- device label and icon -------------------------------------------------
+#
+# A device label is owner-written free text, display only: it must never
+# reach an frp proxy name, ssh config, a hosts file, a path, a shell
+# command or a URL -- the device name keeps that job. The rules keep it
+# from injecting terminal escapes, breaking table rows or reordering text.
+# The error texts are a wire contract: clients match them whole and map
+# each to a localised message, so never change them or add variable parts.
+
+DEVICE_LABEL_MAX_LENGTH = 64
+_DEVICE_LABEL_RAW_MAX_LENGTH = 256
+
+LABEL_TOO_LONG_RAW = "label is too long"
+LABEL_CONTROL_CHARACTER = "label contains a line break or control character"
+LABEL_INVISIBLE_CHARACTER = "label contains an invisible or formatting character"
+LABEL_NOT_VISIBLE = "label has no visible characters"
+LABEL_TOO_LONG = "label is longer than 64 characters"
+
+# Format characters a label may keep: ZWNJ and ZWJ, which emoji sequences
+# and some scripts need. Every other Cf, the bidi controls included, is out.
+_ALLOWED_FORMAT_CHARACTERS = frozenset("\u200c\u200d")
+# Letters and symbols that render blank, so would make an invisible label.
+_BLANK_RENDERING_CHARACTERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
+
+_KNOWN_ICONS = frozenset(icon.value for icon in DeviceIcon)
+
+
+def validate_device_label(raw: str | None) -> str | None:
+    """Return the label to store, or None to clear it.
+
+    Raises ``ValidationError`` with one of the fixed ``LABEL_*`` texts.
+    The order matters: the raw cap bounds the work on untrusted input
+    before NFC, and forbidden characters are checked before stripping, so
+    a trailing newline is refused rather than quietly dropped.
+    """
+    if raw is None:
+        return None
+    if len(raw) > _DEVICE_LABEL_RAW_MAX_LENGTH:
+        raise ValidationError(LABEL_TOO_LONG_RAW)
+    text = unicodedata.normalize("NFC", raw)
+    for ch in text:
+        category = unicodedata.category(ch)
+        if category in ("Cc", "Zl", "Zp"):
+            raise ValidationError(LABEL_CONTROL_CHARACTER)
+        if (
+            (category == "Cf" and ch not in _ALLOWED_FORMAT_CHARACTERS)
+            or category in ("Co", "Cs")
+            or ch in _BLANK_RENDERING_CHARACTERS
+        ):
+            raise ValidationError(LABEL_INVISIBLE_CHARACTER)
+    text = text.strip()
+    if not text:
+        return None
+    if not any(unicodedata.category(ch)[0] in "LNPS" for ch in text):
+        raise ValidationError(LABEL_NOT_VISIBLE)
+    if len(text) > DEVICE_LABEL_MAX_LENGTH:
+        raise ValidationError(LABEL_TOO_LONG)
+    return text
+
+
+def validate_device_icon(icon: str | None) -> str | None:
+    """Return the icon override to store; None means automatic. Strict:
+    a person chose the value, so anything outside the set is an error."""
+    if icon is None or icon in _KNOWN_ICONS:
+        return icon
+    allowed = ", ".join(i.value for i in DeviceIcon)
+    raise ValidationError(f"unknown icon {icon!r}; use one of: {allowed}")
+
+
+class _Unset:
+    pass
+
+
+UNSET: Final = _Unset()
+
+
+def set_device_display(
+    session: Session,
+    device_id: str,
+    *,
+    label: str | None | _Unset = UNSET,
+    icon: str | None | _Unset = UNSET,
+) -> Device:
+    """Set a device's label and/or icon override. A field left as
+    ``UNSET`` keeps its stored value; None clears it. Both are validated
+    before either is written."""
+    device = session.get(Device, device_id)
+    if device is None:
+        raise NotFoundError(f"no such device {device_id!r}")
+    new_label = device.label if isinstance(label, _Unset) else validate_device_label(label)
+    new_icon = device.icon if isinstance(icon, _Unset) else validate_device_icon(icon)
+    device.label = new_label
+    device.icon = new_icon
+    session.add(device)
+    session.commit()
+    session.refresh(device)
+    return device
 
 
 def _now() -> datetime.datetime:
@@ -688,10 +790,22 @@ def delete_device(session: Session, device_id: str) -> None:
     session.commit()
 
 
-def record_heartbeat(session: Session, device: Device, *, agent_version: str | None = None) -> None:
+def record_heartbeat(
+    session: Session,
+    device: Device,
+    *,
+    agent_version: str | None = None,
+    kind: str | None = None,
+) -> None:
+    """``kind`` is lenient, unlike the owner's icon override: a value this
+    server does not know (a newer device) or None leaves the stored kind
+    untouched, so the heartbeat itself never fails over it. Only a known
+    value is ever stored."""
     device.last_seen_at = _now()
     if agent_version is not None:
         device.agent_version = agent_version
+    if kind in _KNOWN_ICONS and kind != device.kind:
+        device.kind = kind
     session.add(device)
     session.commit()
 
@@ -861,6 +975,7 @@ class DeviceView:
     last_seen_at: datetime.datetime | None
     agent_version: str | None
     enabled: bool
+    label: str | None
 
 
 def list_devices_view(session: Session) -> list[DeviceView]:
@@ -874,6 +989,7 @@ def list_devices_view(session: Session) -> list[DeviceView]:
             last_seen_at=d.last_seen_at,
             agent_version=d.agent_version,
             enabled=d.enabled,
+            label=d.label,
         )
         for d, u in rows
     ]

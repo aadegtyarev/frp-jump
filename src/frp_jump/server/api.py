@@ -21,6 +21,7 @@ from sqlmodel import Session as DbSession
 
 from frp_jump.common import ssh_signing
 from frp_jump.common.api import PROTOCOL_VERSION
+from frp_jump.common.device_display import FEATURE_DEVICE_DISPLAY
 from frp_jump.common.models import Device
 from frp_jump.driver.base import ServiceProtocol
 from frp_jump.server import registry
@@ -33,9 +34,17 @@ except PackageNotFoundError:
     _PACKAGE_VERSION = "dev"
 
 
+#: Optional capabilities the protocol version does not imply. Clients
+#: detect support only through this list; an old server sends no
+#: ``features`` key, which clients read as an empty list. It gates UI and
+#: commands, it is not a security boundary.
+FEATURES = [FEATURE_DEVICE_DISPLAY]
+
+
 class VersionResponse(BaseModel):
     protocol_version: int
     package_version: str
+    features: list[str]
 
 
 @router.get("/version", response_model=VersionResponse)
@@ -45,7 +54,11 @@ def version() -> VersionResponse:
     protocol version, before doing anything else (`client doctor`/
     `enroll` use this). See ``common/api.PROTOCOL_VERSION``'s docstring
     for what this number means and doesn't."""
-    return VersionResponse(protocol_version=PROTOCOL_VERSION, package_version=_PACKAGE_VERSION)
+    return VersionResponse(
+        protocol_version=PROTOCOL_VERSION,
+        package_version=_PACKAGE_VERSION,
+        features=list(FEATURES),
+    )
 
 
 def get_db(request: Request) -> DbSession:
@@ -254,6 +267,11 @@ def enroll_by_key(
 
 class HeartbeatRequest(BaseModel):
     agent_version: str | None = None
+    # Deliberately not the DeviceIcon enum: a newer device reporting a
+    # value this server does not know must not turn the whole heartbeat
+    # into a 422 (and the device into "offline"). record_heartbeat drops
+    # unknown values instead.
+    kind: str | None = None
 
 
 @router.post("/heartbeat", status_code=status.HTTP_204_NO_CONTENT)
@@ -262,7 +280,7 @@ def heartbeat(
     db: Annotated[DbSession, Depends(get_db)],
     device: Annotated[Device, Depends(get_current_device)],
 ) -> None:
-    registry.record_heartbeat(db, device, agent_version=body.agent_version)
+    registry.record_heartbeat(db, device, agent_version=body.agent_version, kind=body.kind)
 
 
 class ExposedGrantOut(BaseModel):
@@ -429,6 +447,24 @@ class OwnedDeviceOut(BaseModel):
     enrolled_at: str
     last_seen_at: str | None
     enabled: bool
+    # Display only (see registry.validate_device_label); null when unset.
+    label: str | None
+    # The owner's override; null means automatic.
+    icon: str | None
+    # What the device reports about itself; null when unknown.
+    kind: str | None
+
+
+def _owned_device_out(d: Device) -> OwnedDeviceOut:
+    return OwnedDeviceOut(
+        name=d.name,
+        enrolled_at=d.enrolled_at.isoformat(),
+        last_seen_at=d.last_seen_at.isoformat() if d.last_seen_at else None,
+        enabled=d.enabled,
+        label=d.label,
+        icon=d.icon,
+        kind=d.kind,
+    )
 
 
 @router.get("/devices", response_model=list[OwnedDeviceOut])
@@ -439,13 +475,7 @@ def list_my_devices(
     """`client devices list`: every device owned by the same person as the
     caller."""
     return [
-        OwnedDeviceOut(
-            name=d.name,
-            enrolled_at=d.enrolled_at.isoformat(),
-            last_seen_at=d.last_seen_at.isoformat() if d.last_seen_at else None,
-            enabled=d.enabled,
-        )
-        for d in registry.list_devices_for_owner(db, device.owner_user_id)
+        _owned_device_out(d) for d in registry.list_devices_for_owner(db, device.owner_user_id)
     ]
 
 
@@ -492,6 +522,36 @@ def enable_my_device(
     """`client devices enable`: undo `disable`."""
     target = _get_owned_device_by_name(db, device, name)
     registry.enable_device(db, target.id)
+
+
+class DisplayRequest(BaseModel):
+    # A field left out of the body stays as it is; an explicit null clears
+    # it -- the route tells the two apart through model_fields_set. Both are
+    # plain str, not the enum, so a bad icon is a 400 from the registry
+    # with the allowed values, not a 422.
+    label: str | None = None
+    icon: str | None = None
+
+
+@router.post("/devices/{name}/display", response_model=OwnedDeviceOut)
+def set_my_device_display(
+    name: str,
+    body: DisplayRequest,
+    db: Annotated[DbSession, Depends(get_db)],
+    device: Annotated[Device, Depends(get_enabled_device)],
+) -> OwnedDeviceOut:
+    """Set the label and/or icon override of one of your own devices. The
+    target may be disabled; the caller may not."""
+    fields = body.model_fields_set
+    if not fields:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "nothing to change: send label or icon")
+    target = _get_owned_device_by_name(db, device, name)
+    changes = {field: getattr(body, field) for field in fields}
+    try:
+        updated = registry.set_device_display(db, target.id, **changes)
+    except registry.ValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return _owned_device_out(updated)
 
 
 class ConnectRequest(BaseModel):

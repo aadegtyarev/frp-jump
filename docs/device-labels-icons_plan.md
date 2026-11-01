@@ -424,15 +424,17 @@ engine's single shared DBAPI connection instead. A new
 1. Read the version. If it is current, return without writing anything, so a
    database that is already up to date never needs write access.
 2. Otherwise, `BEGIN IMMEDIATE`. That takes SQLite's write lock up front, so
-   creating the tables, checking the version and running the `ALTER`s are one
+   checking the version, creating the tables and running the `ALTER`s are one
    atomic step. The connection waits up to 10 s for the lock.
 3. Under the lock:
-   1. Create the model's tables and indexes. The runner emits the DDL itself
+   1. Read the version again. Another process may have migrated while this
+      one waited for the lock; if the version is now current, it only
+      `COMMIT`s and creates nothing.
+   2. Create the model's tables and indexes. The runner emits the DDL itself
       on its own connection: SQLAlchemy's `CreateTable(..., if_not_exists=True)`
       and `CreateIndex(..., if_not_exists=True)`, compiled for SQLite. It does
       not call `metadata.create_all`, which opens and commits a transaction of
       its own and would end the `BEGIN IMMEDIATE` early.
-   2. Read the version again.
    3. Apply the pending steps in order.
    4. Set the version and `COMMIT`.
 

@@ -276,6 +276,9 @@ erDiagram
         string api_token_hash
         bool enabled
         datetime last_seen_at
+        string label
+        string icon
+        string kind
     }
     SERVICE {
         int target_port
@@ -301,6 +304,41 @@ A few things worth knowing about this shape:
 
 Profiles — the names you pass to `--as` — are also purely local. The server
 knows the connection as (device, port), nothing more.
+
+## Device labels and icons
+
+A device name such as `wb01` is strict, because it becomes a tunnel name and an
+ssh alias. To say what a device is and where it stands, each device can also
+carry a label and an icon. Both are stored on the server, so every device and
+phone of the owner sees the same values.
+
+The **label** is free text the owner writes, such as «Щиток, гараж», up to 64
+characters. It is shown next to the name and never replaces it. The owner sets
+it with `frp-jump-client devices label`, for any of their own devices.
+
+The **icon** comes from a fixed set: `linux`, `wirenboard`, `server`, `pc`,
+`laptop`, `router`, `sbc`, `camera`, `home` and `phone`. The device reports a
+kind itself in every heartbeat. The agent detects it once when it starts, from
+a few files, and the first match wins:
+
+1. `/etc/wb-release` exists: `wirenboard`.
+2. `/etc/openwrt_release` exists: `router`.
+3. A virtual machine (the `hypervisor` CPU flag, or `/sys/hypervisor/type`):
+   `linux`.
+4. DMI is present: the SMBIOS chassis type picks `laptop`, `server`, `pc` or
+   `sbc`. Any other chassis type gives `laptop` if the machine has a battery of
+   its own, and `linux` otherwise.
+5. No DMI, but `/proc/device-tree/model` is set, as on a Raspberry Pi: `sbc`.
+6. Anything else: `linux`.
+
+Nothing detects `camera` or `home`; they exist for the owner to pick. `phone`
+is meant for the Android app to report about itself. An agent older than this
+feature reports nothing, and the device shows a generic icon.
+
+A guess can be wrong: an ARM virtual machine, for instance, can come out as
+`sbc`. The owner's override, set with `frp-jump-client devices icon`, always
+wins over the detected kind, and `auto` drops it again. In `devices list`, a
+detected icon is marked `(auto)`.
 
 ## What this doesn't do
 

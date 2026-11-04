@@ -21,6 +21,10 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
   IPv6 network such as `fc00::/7`. httpx can't parse those entries; they are
   now dropped from the process environment at startup. httpx never matched
   CIDR ranges, so which requests go through the proxy doesn't change.
+- Every command that talks to the server failed with `ImportError: Using
+  SOCKS proxy, but the 'socksio' package is not installed` when
+  `ALL_PROXY`/`all_proxy` pointed at a SOCKS proxy. frp-jump now depends on
+  `httpx[socks]`, so SOCKS proxies work.
 - The `frp-jump-client` Debian package removes distribution metadata
   (`*.dist-info`) under `/opt/frp-jump-client/site-packages` that it doesn't
   ship. A leftover `frp_jump-0.3.15.dev0.dist-info`, written there outside

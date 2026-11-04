@@ -8,6 +8,19 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ### Fixed
 
+- **`connect --local-port N` could still be ignored, and the new profile
+  lost, while `run` was looping.** The daemon reloaded state.json before
+  asking the server for desired state; `connect` creates the grant on the
+  server first and saves the profile and pin after. A cycle in between saw
+  the new grant, gave it a port from the automatic range, and saved over
+  both -- while `connect` reported the pinned port. state.json updates are
+  now serialised with a lock file (`state.lock`), and every writer reloads
+  the file under that lock before changing it.
+- Every command that talks to the server crashed with
+  `InvalidURL: Invalid port: ':'` when `NO_PROXY`/`no_proxy` contained an
+  IPv6 network such as `fc00::/7`. httpx can't parse those entries; they are
+  now dropped from the process environment at startup. httpx never matched
+  CIDR ranges, so which requests go through the proxy doesn't change.
 - The `frp-jump-client` Debian package removes distribution metadata
   (`*.dist-info`) under `/opt/frp-jump-client/site-packages` that it doesn't
   ship. A leftover `frp_jump-0.3.15.dev0.dist-info`, written there outside

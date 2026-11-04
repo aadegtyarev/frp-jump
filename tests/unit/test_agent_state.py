@@ -66,3 +66,54 @@ def test_load_raises_clearly_on_corrupted_state_file(tmp_path) -> None:
     path.write_text("not json at all {{{")
     with pytest.raises(json.JSONDecodeError):
         load(tmp_path)
+
+
+def test_update_state_saves_changes_made_in_the_block(tmp_path) -> None:
+    from frp_jump.agent.state import update_state
+
+    save(tmp_path, _state())
+    with update_state(tmp_path) as state:
+        state.profiles["web"] = Profile(device_name="wb02", target_port=80)
+
+    assert load(tmp_path).profiles == {"web": Profile(device_name="wb02", target_port=80)}
+
+
+def test_update_state_saves_nothing_when_the_block_raises(tmp_path) -> None:
+    from frp_jump.agent.state import update_state
+
+    save(tmp_path, _state())
+    with pytest.raises(RuntimeError), update_state(tmp_path) as state:
+        state.profiles["web"] = Profile(device_name="wb02", target_port=80)
+        raise RuntimeError
+
+    assert load(tmp_path).profiles == {}
+
+
+def test_update_state_raises_when_not_enrolled(tmp_path) -> None:
+    from frp_jump.agent.state import update_state
+
+    with pytest.raises(FileNotFoundError), update_state(tmp_path):
+        pass
+
+
+def test_update_state_waits_for_a_held_lock(tmp_path) -> None:
+    import threading
+
+    from frp_jump.agent.state import locked, update_state
+
+    save(tmp_path, _state())
+    done = threading.Event()
+
+    def writer() -> None:
+        with update_state(tmp_path) as state:
+            state.disable_p2p = True
+        done.set()
+
+    with locked(tmp_path):
+        thread = threading.Thread(target=writer)
+        thread.start()
+        assert not done.wait(0.2)
+    thread.join(timeout=5)
+
+    assert done.is_set()
+    assert load(tmp_path).disable_p2p is True

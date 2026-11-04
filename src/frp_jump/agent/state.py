@@ -14,9 +14,11 @@ server and must not be conflated.
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import json
 import os
 import tempfile
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -70,6 +72,51 @@ def wake_path(data_dir: Path) -> Path:
 def request_wake(data_dir: Path) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     wake_path(data_dir).touch()
+
+
+def lock_path(data_dir: Path) -> Path:
+    return data_dir / "state.lock"
+
+
+@contextlib.contextmanager
+def locked(data_dir: Path) -> Iterator[None]:
+    """Serialise read-modify-write cycles on state.json between the `run`
+    daemon and one-shot CLI commands. Without it, `connect` and the daemon
+    both loaded state.json, changed different fields, and saved -- whoever
+    saved last silently dropped the other's change. In practice the daemon
+    won: `connect` created the grant server-side first, the daemon's next
+    poll saw it and saved its own copy over the new profile and the
+    `--local-port` pin.
+
+    Held only around local file work, never around a network call, so a
+    slow server can't stall a CLI command behind the daemon.
+
+    Opened read-only on purpose: flock works on any descriptor, and a lock
+    file created by `sudo` must not lock a non-root user out.
+    """
+    data_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path(data_dir), os.O_RDONLY | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)  # closing releases the flock
+
+
+@contextlib.contextmanager
+def update_state(data_dir: Path) -> Iterator[AgentState]:
+    """Lock, load the current state.json, let the caller change it, save.
+
+    Use this instead of saving a state loaded earlier: anything another
+    process wrote since then would be overwritten. Nothing is saved if
+    the block raises.
+    """
+    with locked(data_dir):
+        state = load(data_dir)
+        if state is None:
+            raise FileNotFoundError(state_path(data_dir))
+        yield state
+        save(data_dir, state)
 
 
 def load(data_dir: Path) -> AgentState | None:

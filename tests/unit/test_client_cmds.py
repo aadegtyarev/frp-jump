@@ -1027,3 +1027,33 @@ def test_enroll_qr_glyphs_draw_the_light_modules():
         drawn.append([not light_halves[c][0] for c in line])
         drawn.append([not light_halves[c][1] for c in line])
     assert drawn[: len(dark)] == dark
+
+
+def test_connect_keeps_what_the_daemon_saved_while_the_grant_was_being_created(
+    tmp_path, monkeypatch
+):
+    """Regression: `connect` used to save the state it loaded at start-up.
+    The running daemon saves its port allocation for the new grant in the
+    meantime, and `connect` overwrote it with the stale copy -- or the
+    daemon overwrote the profile and pin. Both writes must survive."""
+    _enrolled_state(tmp_path)
+
+    def fake_connect(state, *, device_name, target_port, protocol):
+        # The daemon's cycle runs while the server request is in flight.
+        daemon_view = load(tmp_path)
+        daemon_view.local_ports["g-other"] = 40005
+        save(tmp_path, daemon_view)
+        return {"grant_id": "g1"}
+
+    monkeypatch.setattr(poller, "connect", fake_connect)
+    monkeypatch.setattr(poller, "is_bindable", lambda port: True)
+    monkeypatch.setattr(client_cmds, "_wait_for_local_port", lambda data_dir, grant_id: 9090)
+
+    result = runner.invoke(
+        client_cmds.app, ["connect", "wb02:9090", "--local-port", "9090", "--as", "wb02-web"]
+    )
+
+    assert result.exit_code == 0, result.output
+    reloaded = load(tmp_path)
+    assert reloaded.local_ports == {"g-other": 40005, "g1": 9090}
+    assert reloaded.profiles["wb02-web"] == Profile(device_name="wb02", target_port=9090)

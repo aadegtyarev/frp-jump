@@ -1155,3 +1155,60 @@ def test_set_device_display_raises_sync_error_with_the_server_reason(monkeypatch
     monkeypatch.setattr(poller.httpx, "post", fake_post)
     with pytest.raises(poller.SyncError, match="line break or control character"):
         poller.set_device_display(state, "laptop", {"label": "a\nb"})
+
+
+def test_sync_once_keeps_a_profile_and_pin_saved_during_its_server_round_trip(
+    tmp_path, monkeypatch
+) -> None:
+    """Regression: the daemon reloaded state.json *before* asking the
+    server. `connect` creates the grant on the server and only then saves
+    its profile and `--local-port` pin; a cycle in between saw the new
+    grant, allocated a port from the range, and saved over both. Seen in
+    the field as `connect beelink:9090 --local-port 9090` reporting 9090
+    while the tunnel was actually bound to 40003 and the profile was gone."""
+    from frp_jump.agent.state import save as save_state
+
+    state = _state()
+    save_state(tmp_path, state)
+    driver = FakeDriver()
+
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    def fake_get(url, *, headers, timeout):
+        # `connect` finishes while the daemon waits for desired-state.
+        on_disk = load(tmp_path)
+        on_disk.profiles = {"beelink-vm": Profile(device_name="beelink", target_port=9090)}
+        on_disk.local_ports = {"g1": 9090}
+        save_state(tmp_path, on_disk)
+        remote = {
+            "exposed": [],
+            "consumed": [
+                {
+                    "grant_id": "g1",
+                    "secret": "s1",
+                    "service_name": "svc-1-9090",
+                    "protocol": "tcp",
+                    "exposer_device_name": "beelink",
+                    "target_port": 9090,
+                }
+            ],
+            "protocol_version": poller.PROTOCOL_VERSION,
+        }
+        return httpx.Response(200, json=remote, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    monkeypatch.setattr(poller.httpx, "get", fake_get)
+
+    poller.sync_once(
+        state,
+        driver,
+        data_dir=tmp_path,
+        ssh_config_path=tmp_path / "ssh_config_real",
+        port_range=_PORT_RANGE,
+    )
+
+    reloaded = load(tmp_path)
+    assert reloaded.local_ports == {"g1": 9090}
+    assert reloaded.profiles == {"beelink-vm": Profile(device_name="beelink", target_port=9090)}
+    assert driver.applied[-1].consumed[0].local_bind_port == 9090

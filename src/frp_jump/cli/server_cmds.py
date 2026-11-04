@@ -16,6 +16,7 @@ from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
+from frp_jump.common.proxy_env import drop_ipv6_networks_from_no_proxy
 from frp_jump.common.settings import Settings
 from frp_jump.driver.base import RelayState
 
@@ -83,7 +84,7 @@ def _main(
         help="Show the installed frp-jump version and exit.",
     ),
 ) -> None:
-    pass
+    drop_ipv6_networks_from_no_proxy()
 
 
 def _make_engine(settings: Settings):

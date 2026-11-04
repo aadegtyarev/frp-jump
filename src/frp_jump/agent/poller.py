@@ -15,7 +15,7 @@ import httpx
 
 from frp_jump.agent import hosts
 from frp_jump.agent.device_kind import detect_kind
-from frp_jump.agent.state import AgentState, load, save, wake_path
+from frp_jump.agent.state import AgentState, load, locked, save, wake_path
 from frp_jump.common import ssh_signing
 from frp_jump.common.api import (
     AGENT_API_PREFIX,
@@ -584,19 +584,26 @@ def sync_once(
     it for ``disable_p2p`` would mean `set-p2p` silently requires a
     daemon restart to take effect, despite waking it same as `connect`/
     `disconnect` and claiming otherwise in its own `--help`.
-    """
-    on_disk = load(data_dir)
-    if on_disk is not None:
-        state.profiles = on_disk.profiles
-        state.local_ports = on_disk.local_ports
-        state.disable_p2p = on_disk.disable_p2p
 
+    The reload happens *after* the server round-trip and under the state
+    lock, together with the save in ``build_desired_state``. Reloading
+    before the round-trip left a window: `connect` creates the grant on
+    the server, then saves its profile and pin. A cycle that had already
+    reloaded saw the new grant from the server, allocated a port for it,
+    and saved over the profile and the pin.
+    """
     send_heartbeat(state, agent_version=agent_version, kind=kind)
     remote = fetch_desired_state(state)
     _log_grant_changes(state.device_id, remote)
-    desired = build_desired_state(
-        state, remote, data_dir=data_dir, port_range=port_range, revalidate=revalidate_ports
-    )
+    with locked(data_dir):
+        on_disk = load(data_dir)
+        if on_disk is not None:
+            state.profiles = on_disk.profiles
+            state.local_ports = on_disk.local_ports
+            state.disable_p2p = on_disk.disable_p2p
+        desired = build_desired_state(
+            state, remote, data_dir=data_dir, port_range=port_range, revalidate=revalidate_ports
+        )
     driver.apply(desired, disable_p2p=state.disable_p2p)
     sync_ssh_config(state, remote, data_dir=data_dir, ssh_config_path=ssh_config_path)
     return desired

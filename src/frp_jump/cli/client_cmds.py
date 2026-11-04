@@ -20,9 +20,10 @@ from rich.text import Text
 
 from frp_jump.agent import enroll as enroll_mod
 from frp_jump.agent import hosts, poller, service_install
-from frp_jump.agent.state import Profile, load, request_wake, save
+from frp_jump.agent.state import Profile, load, request_wake, update_state
 from frp_jump.common.api import PROTOCOL_VERSION
 from frp_jump.common.device_display import FEATURE_DEVICE_DISPLAY, DeviceIcon
+from frp_jump.common.proxy_env import drop_ipv6_networks_from_no_proxy
 from frp_jump.common.settings import Settings
 from frp_jump.driver.base import ServiceProtocol
 from frp_jump.driver.frp.binaries import ensure_installed
@@ -66,7 +67,7 @@ def _main(
         help="Show the installed frp-jump version and exit.",
     ),
 ) -> None:
-    pass
+    drop_ipv6_networks_from_no_proxy()
 
 
 def _ssh_config_path(settings: Settings) -> Path:
@@ -470,8 +471,8 @@ def set_p2p_cmd(
     """
     settings = Settings()
     state = _require_state(settings)
-    state.disable_p2p = setting is _P2PSetting.disabled
-    save(settings.data_dir, state)
+    with update_state(settings.data_dir) as fresh:
+        fresh.disable_p2p = setting is _P2PSetting.disabled
     request_wake(settings.data_dir)
     console.print(f"[green]p2p {setting.value}[/green] for {state.device_name}")
 
@@ -774,10 +775,10 @@ def connect_cmd(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
-    state.profiles[profile_name] = Profile(device_name=device, target_port=port)
-    if local_port is not None:
-        state.local_ports[result["grant_id"]] = local_port
-    save(settings.data_dir, state)
+    with update_state(settings.data_dir) as fresh:
+        fresh.profiles[profile_name] = Profile(device_name=device, target_port=port)
+        if local_port is not None:
+            fresh.local_ports[result["grant_id"]] = local_port
     request_wake(settings.data_dir)
 
     local_bound = _wait_for_local_port(settings.data_dir, result["grant_id"])
@@ -1131,11 +1132,10 @@ def devices_delete_cmd(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
-    stale = [p for p, profile in state.profiles.items() if profile.device_name == name]
-    for profile_name in stale:
-        del state.profiles[profile_name]
-    if stale:
-        save(settings.data_dir, state)
+    with update_state(settings.data_dir) as fresh:
+        stale = [p for p, profile in fresh.profiles.items() if profile.device_name == name]
+        for profile_name in stale:
+            del fresh.profiles[profile_name]
     request_wake(settings.data_dir)
     console.print(f"[green]Deleted[/green] {name}.")
 
@@ -1229,6 +1229,6 @@ def profiles_delete_cmd(
             f"[red]no such profile[/red] {name!r} -- see [bold]frp-jump-client profiles list[/bold]"
         )
         raise typer.Exit(1)
-    del state.profiles[name]
-    save(settings.data_dir, state)
+    with update_state(settings.data_dir) as fresh:
+        fresh.profiles.pop(name, None)
     console.print(f"[green]Deleted profile[/green] {name}.")

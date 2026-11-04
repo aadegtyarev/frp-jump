@@ -6,6 +6,8 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.20] - 2026-11-04
+
 ### Fixed
 
 - **`connect --local-port N` could still be ignored, and the new profile

@@ -149,6 +149,16 @@ def build_frpc_config(
                 "bindPort": consumed.local_bind_port,
                 "fallbackTo": stcp_name,
                 "fallbackTimeoutMs": fallback_timeout_ms,
+                # A connection only *uses* a punched tunnel; the punch itself
+                # runs in frpc's background worker and takes longer than any
+                # fallback timeout we'd accept on a connection. Without this,
+                # a punch starts only when a connection finds no tunnel -- so
+                # that connection relays, and a failed or dropped tunnel stays
+                # down until the next one. With it, frpc punches at startup
+                # and re-checks every minRetryInterval (90s), at most
+                # maxRetriesAnHour (8) punches, so the tunnel is usually
+                # ready before anyone connects.
+                "keepTunnelOpen": True,
                 **_encrypted(),
             }
         )

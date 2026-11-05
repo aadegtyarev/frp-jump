@@ -81,6 +81,7 @@ def test_frpc_config_wires_xtcp_visitor_fallback_to_stcp_visitor() -> None:
     assert xtcp_visitor["bindPort"] == 2222
     assert xtcp_visitor["fallbackTo"] == "g2-stcp-visitor"
     assert xtcp_visitor["fallbackTimeoutMs"] == 750
+    assert xtcp_visitor["keepTunnelOpen"] is True
 
 
 def test_frpc_config_disable_p2p_skips_xtcp_visitor_entirely() -> None:

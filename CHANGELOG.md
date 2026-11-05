@@ -6,6 +6,8 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.21] - 2026-11-05
+
 ### Fixed
 
 - **Connections relayed whenever no peer-to-peer tunnel happened to be

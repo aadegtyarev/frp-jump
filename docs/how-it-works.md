@@ -193,7 +193,15 @@ bindAddr = "127.0.0.1"
 bindPort = 40000                       # the port the agent picked
 fallbackTo = "<grant-id>-stcp-visitor"
 fallbackTimeoutMs = 500
+keepTunnelOpen = true                  # punch in the background, not per connection
 ```
+
+The two timing settings split the work. Hole-punching (STUN, exchanging
+addresses through frps, the punch itself) takes a second or more and runs in
+frpc's background, never inside a connection. `keepTunnelOpen` starts it when
+frpc starts and repeats it when the tunnel drops, at most 8 times an hour. A new
+connection then waits at most `fallbackTimeoutMs`: it gets the ready tunnel
+straight away, or goes through the relay while the background keeps trying.
 
 `useEncryption` covers the tunneled payload, not just the control channel. The
 per-connection secret is the real gate — frp's own `allowUsers` ACL is set to

@@ -6,6 +6,17 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Connections relayed whenever no peer-to-peer tunnel happened to be
+  up.** frpc only started hole-punching when a connection found no tunnel,
+  and a punch takes longer than the 500ms `fallbackTimeoutMs`, so that
+  connection relayed; a punch that failed, or a tunnel lost to a network
+  change, stayed down until the next connection. xtcp visitors now set
+  `keepTunnelOpen`: frpc punches at startup and re-checks every 90s in the
+  background (at most 8 punches an hour), so the tunnel is usually ready
+  before anyone connects. Connection setup is never slower than before.
+
 ## [0.3.20] - 2026-11-04
 
 ### Fixed

@@ -72,8 +72,11 @@ The only setting with no usable default is `relay_public_addr`. Both
 | `frp_version` | `0.70.0` | Which upstream frp release to download |
 | `xtcp_fallback_timeout_ms` | `500` | How long to attempt a direct connection before relaying |
 
-A note on the last one. A successful hole-punch resolves well inside 500 ms, so
-raising this mostly just makes *failing* punches slower. If peer-to-peer never
+A note on the last one. It is how long a new connection waits for a
+peer-to-peer tunnel that is *already* punched, not how long punching may take:
+punching runs in the background (`keepTunnelOpen`), so a ready tunnel answers in
+milliseconds and raising this mostly just makes connections slower whenever the
+tunnel is down. If peer-to-peer never
 works on a given device, `frp-jump-client set-p2p disabled` skips the attempt
 entirely, which is better than a longer timeout.
 

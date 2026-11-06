@@ -8,19 +8,11 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [0.3.23] - 2026-11-06
 
-0.3.22 was tagged but never published: its armhf build kept failing on
-snapshot.debian.org outages. This release carries the same change.
-
 ### Fixed
 
 - **The armhf release build failed whenever snapshot.debian.org had a
   bad moment.** It answers "503 No healthy backends" in bursts and apt gave
   up on the first one; apt now retries each download up to 10 times.
-
-## [0.3.22] - 2026-11-06
-
-### Fixed
-
 - **Upgrading the `.deb` left `install-service --user` agents on the old
   code.** postinst restarted only the system unit; a per-user unit lives in
   that user's own systemd manager, which the system `systemctl` can't see.

@@ -54,6 +54,9 @@ RUN if [ "$NEEDS_C_TOOLCHAIN" = "true" ]; then \
             -e 's|^deb http://deb\.debian\.org|# deb http://deb.debian.org|' \
             /etc/apt/sources.list \
         && echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until \
+        # snapshot.debian.org answers "503 No healthy backends" in bursts;
+        # apt gives up on the first one by default and fails the build. \
+        && echo 'Acquire::Retries "10";' > /etc/apt/apt.conf.d/99retries \
         && apt-get update -qq \
         && apt-get install -qq -y --no-install-recommends gcc libffi-dev libc6-dev \
         && rm -rf /var/lib/apt/lists/* ; \

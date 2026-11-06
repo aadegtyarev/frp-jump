@@ -6,6 +6,14 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Upgrading the `.deb` left `install-service --user` agents on the old
+  code.** postinst restarted only the system unit; a per-user unit lives in
+  that user's own systemd manager, which the system `systemctl` can't see.
+  The delayed restart now also runs `systemctl --user try-restart` for every
+  user with a running manager. Still only running agents are restarted.
+
 ## [0.3.21] - 2026-11-05
 
 ### Fixed

@@ -1,0 +1,50 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Architectures: amd64 arm64 armhf
+Codename: stable
+Components: main
+Date: Fri, 06 Nov 2026 09:05:57 +0000
+Description: frp-jump package repository
+Label: frp-jump
+Origin: frp-jump
+Suite: stable
+MD5Sum:
+ 958614ebc8e754f880b117bed6d655e0              193 Release
+ dd16cc4f00af785ce1146670a533f02a              783 main/binary-amd64/Packages
+ 64231b9089b2bee82c269689494aba46              530 main/binary-amd64/Packages.gz
+ 2983d57954cb4296db3874f339800520              783 main/binary-arm64/Packages
+ b90e3bfdba64bef7ce5e656f25a21701              531 main/binary-arm64/Packages.gz
+ 4a58de502d9f1a2ba0675b22b87ec60a              783 main/binary-armhf/Packages
+ 2445e94acd44d30ec5853e0602a2015c              533 main/binary-armhf/Packages.gz
+SHA1:
+ 9ab5b40aa0f6158c9b394b2a0e309930fc84d2b6              193 Release
+ bf90ecb8bf040ace032b3f94b95882abfaa5fcb7              783 main/binary-amd64/Packages
+ 92ba9c274434ce0944b55b1c12a56c2e637b2803              530 main/binary-amd64/Packages.gz
+ a39dee3082589dd1aefe70b397aef6190c651a93              783 main/binary-arm64/Packages
+ 8222750958fd707c83959d5ce6bbc9c1348c0d6c              531 main/binary-arm64/Packages.gz
+ 64755bba778ffbcee5521806b2707b36302959d4              783 main/binary-armhf/Packages
+ cc480a0f107560e5aeba1cb9b4ccfd95e377d97f              533 main/binary-armhf/Packages.gz
+SHA256:
+ 691f21a3cb7a75f8447c36cc9fbb88d48bdb8cafecfb382d6e9e0cdb565d0aa2              193 Release
+ ec1068c9e318decef0289ae73006a3cb228fdf369345b3ea4e3d50b74ce37d85              783 main/binary-amd64/Packages
+ 4e97dcb6206d7b39911687d252d0a4a06da316ef4ff72adbbc0dfb276ed1047b              530 main/binary-amd64/Packages.gz
+ a460a51fbcdbec75ef5f1012b2551d154f610d31ab7c604e1c0707427b7e91d6              783 main/binary-arm64/Packages
+ 78f9055600f7b71bfb8743c74dce3645874c2067aba87dc538ce26b63a425913              531 main/binary-arm64/Packages.gz
+ 1300edbdf994c0daa73b2230fe328f3dd0778c6b5bd1262d723e6ec1d4c204f7              783 main/binary-armhf/Packages
+ df4038a05c9ea89f187a9843a4c65431e7145d0926c72014066d7f5ac7c83736              533 main/binary-armhf/Packages.gz
+SHA512:
+ 337e7fed99f6ce8ba707a416d09ae9e6af6b3ee93ec9ffd6684a0aa095d6cf5a9bac1123cce5777f4f8cb13f8331fe72888f7ad9204bf623fb6ed8d814121d15              193 Release
+ c4755270ea37d29733f6993feffa20b88cd854b0ef26d42c0981fd96fa641f7f69de35c664bce98ab3ccae6177a308ae443210716a539ec13c76b45f9b58c7f3              783 main/binary-amd64/Packages
+ 8b094cd6adc6c026fb6016d921fe07a9fc82f6be28f8df30894bbac3b103795f96d2095b6b7ac894d6367d8fc0e69374cad445e3e1de7cb057d7c69d08379d6c              530 main/binary-amd64/Packages.gz
+ e590086cc557587a3f1b77a93ef3dbcbb8b32bb8c7ae4013595afd6bbf1e86487839fc978a0abcbd89fee3deebf43b0e832aa6d97b40d64c11d3e1b7663f3d06              783 main/binary-arm64/Packages
+ 5c843dbc351985f4ab5fce5cea28d8f669c93608c27908d94dc193984749e96856ea7856f37dad72b359814d203999113c4ad1748656776ce0865c02d31beba3              531 main/binary-arm64/Packages.gz
+ dd7c1b3202d2a1264029398725ff9ba63242d02e552449b649cf08b4270223a8cce80d59fcfaa77b7a72fe998cd5e71b7ba6649686ac791dfc2d3c8100209b08              783 main/binary-armhf/Packages
+ c15bf54952f08d7752f0cffbd46e1bce12f430ccc6b05d58686ad588ef92fbb969bb7c9dc213447ad009acc9b459522c35aa49f0bfac52f7a643d7228ce40b37              533 main/binary-armhf/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iHUEARYKAB0WIQS7kPgZ5c1o/Wz8juNiv6iRj+82FAUCau2YdQAKCRBiv6iRj+82
+FPJEAQDmDGFlYU+HGy8DXTGS8MS5sI5lYvcEs+znzuovUlaEqgEAytYbOm0yPDJl
+W/DzCrkCybBs8rY/LerSyV8o6H6r1gM=
+=Rle6
+-----END PGP SIGNATURE-----

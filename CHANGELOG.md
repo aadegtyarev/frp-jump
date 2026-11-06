@@ -6,6 +6,8 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.22] - 2026-11-06
+
 ### Fixed
 
 - **Upgrading the `.deb` left `install-service --user` agents on the old

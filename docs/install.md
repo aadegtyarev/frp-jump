@@ -33,13 +33,13 @@ sudo apt install frp-jump-client
 
 New releases then arrive with your normal `apt upgrade`.
 
-An upgrade restarts the agent's system service if it is running, so the new
-version takes over: about 30 seconds after the upgrade finishes, through a
-one-off systemd timer. The restart drops every tunnel on the machine for a few
-seconds. The delay lets an `apt upgrade` you run over one of those tunnels
-finish first; your ssh session drops afterwards and you reconnect. A stopped
-agent stays stopped, and a per-user service (`install-service --user`) is left
-alone: restart it yourself with `systemctl --user restart frp-jump-client`.
+An upgrade restarts the running agent, so the new version takes over: about 30
+seconds after the upgrade finishes, through a one-off systemd timer. That covers
+both the system service and a per-user one (`install-service --user`) of every
+user whose systemd manager is running. The restart drops every tunnel on the
+machine for a few seconds. The delay lets an `apt upgrade` you run over one of
+those tunnels finish first; your ssh session drops afterwards and you
+reconnect. A stopped agent stays stopped.
 Reconfiguring the package (`dpkg-reconfigure`, `dpkg --configure -a`) restarts
 a running agent the same way.
 

@@ -4,8 +4,10 @@ The script's paths are rooted at $DPKG_ROOT (empty on a real install), so the
 site-packages it cleans lives under tmp_path here.
 """
 
+import getpass
 import os
 import shutil
+import socket
 import subprocess
 from pathlib import Path
 
@@ -117,10 +119,39 @@ def test_upgrade_on_systemd_schedules_a_delayed_detached_restart(env):
 
     calls = _run(env, "configure", "0.3.18")
 
-    assert calls == [
-        "systemctl daemon-reload",
-        "systemd-run --quiet --no-block --on-active=30 "
+    assert calls[0] == "systemctl daemon-reload"
+    assert calls[1].startswith("systemd-run --quiet --no-block --on-active=30 /bin/sh -c ")
+
+
+def _scheduled_script(env) -> str:
+    script_file = env["calls"].with_suffix(".script")
+    _stub(
+        env["bin"], "systemd-run", f'for a; do last="$a"; done; printf %s "$last" > "{script_file}"'
+    )
+    _run(env, "configure", "0.3.18")
+    return script_file.read_text()
+
+
+def test_scheduled_restart_reaches_system_and_running_user_managers(env):
+    (env["root"] / "run" / "systemd" / "system").mkdir(parents=True)
+    run_user = env["root"] / "run" / "user"
+    live = run_user / "1000" / "systemd"
+    live.mkdir(parents=True)
+    (run_user / "1001").mkdir()  # no user manager running: skipped
+    for tool in ("stat", "env"):
+        (env["bin"] / tool).symlink_to(shutil.which(tool))
+    _stub(env["bin"], "runuser", f'echo "runuser $*" >> "{env["calls"]}"')
+    script = _scheduled_script(env)
+    env["calls"].unlink()
+
+    with socket.socket(socket.AF_UNIX) as sock:
+        sock.bind(str(live / "private"))
+        subprocess.run(["/bin/sh", "-c", script], env={**os.environ, **env["vars"]}, check=True)
+
+    assert env["calls"].read_text().splitlines() == [
         "systemctl try-restart frp-jump-client.service",
+        f"runuser -u {getpass.getuser()} -- env XDG_RUNTIME_DIR={run_user / '1000'} "
+        "systemctl --user try-restart frp-jump-client.service",
     ]
 
 

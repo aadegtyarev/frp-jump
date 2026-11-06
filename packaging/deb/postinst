@@ -26,14 +26,28 @@ remove_unowned_dist_info() {
     done
 }
 
+# The system unit, then every user's: an `install-service --user` unit lives
+# in that user's own systemd manager, which the system `systemctl` can't see,
+# so it is reached through runuser with the user's runtime dir.
+restart_agents_script() {
+    cat <<EOF
+systemctl try-restart $PACKAGE.service
+for dir in ${DPKG_ROOT:-}/run/user/*; do
+    [ -S "\$dir/systemd/private" ] || continue
+    user=\$(stat -c %U "\$dir") || continue
+    runuser -u "\$user" -- env XDG_RUNTIME_DIR="\$dir" systemctl --user try-restart $PACKAGE.service
+done
+EOF
+}
+
 if [ "$1" = "configure" ]; then
     remove_unowned_dist_info
     systemctl daemon-reload || true
     # With a previously configured version (an upgrade, but also a reconfigure
     # or `dpkg --configure -a`, where a restart is harmless), restart the
-    # agent only if it is running now, so it picks up the new code; never
-    # start a stopped or never-installed one. Only the system unit: an
-    # `install-service --user` unit belongs to that user's manager.
+    # agents -- the system one and every user's -- only if they are running
+    # now, so they pick up the new code; never start a stopped or
+    # never-installed one.
     #
     # The restart drops every tunnel on the machine, possibly including the
     # ssh session this very `apt upgrade` runs in. So on a live systemd host
@@ -45,7 +59,7 @@ if [ "$1" = "configure" ]; then
         if [ -d "${DPKG_ROOT:-}/run/systemd/system" ] \
             && command -v systemd-run >/dev/null 2>&1; then
             systemd-run --quiet --no-block --on-active=30 \
-                systemctl try-restart "$PACKAGE.service" || true
+                /bin/sh -c "$(restart_agents_script)" || true
         elif command -v deb-systemd-invoke >/dev/null 2>&1; then
             deb-systemd-invoke try-restart "$PACKAGE.service" || true
         else

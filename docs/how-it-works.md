@@ -217,7 +217,7 @@ after a punch works and the next ones hang. frpc keeps using the silent
 tunnel and never falls back.
 
 The agent checks for this itself, once a minute, for SSH connections only. It
-opens the local port and waits up to 10 seconds for the SSH banner. If the
+opens the local port and waits up to 15 seconds for the SSH banner. If the
 connection opens but nothing arrives, that one connection goes through the relay
 for 30 minutes, then peer-to-peer is tried again. A repeat stall soon after
 doubles the wait, up to 4 hours; an hour of working peer-to-peer resets it. The

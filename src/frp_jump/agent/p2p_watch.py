@@ -28,7 +28,10 @@ from concurrent.futures import ThreadPoolExecutor
 logger = logging.getLogger(__name__)
 
 PROBE_INTERVAL_SECONDS = 60.0
-PROBE_TIMEOUT_SECONDS = 10.0
+# Longer than frps's own wait for the exposing side's work connection
+# (``userConnTimeout``, 10s by default): an exposer frps hasn't noticed is
+# gone yet then ends as a close without data, not as a stall.
+PROBE_TIMEOUT_SECONDS = 15.0
 
 # How long a stalled connection stays on the relay before peer-to-peer is
 # tried again. Doubles on every stall that follows soon after the last
@@ -51,13 +54,16 @@ def probe_banner(port: int, *, timeout: float = PROBE_TIMEOUT_SECONDS) -> bool |
     data), which points at frpc or the far side, not at the tunnel, so it
     is not a reason to change how the connection is routed."""
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=timeout) as sock:
-            sock.settimeout(timeout)
-            return bool(sock.recv(1)) or None
-    except TimeoutError:
-        return False
+        sock = socket.create_connection(("127.0.0.1", port), timeout=timeout)
     except OSError:
         return None
+    with sock:
+        try:
+            return bool(sock.recv(1)) or None
+        except TimeoutError:
+            return False
+        except OSError:
+            return None
 
 
 class P2PWatch:
@@ -73,7 +79,9 @@ class P2PWatch:
     ) -> None:
         self._probe = probe
         self._clock = clock
-        self._next_probe_at = 0.0
+        # Not right away: the first cycle has just started or reloaded
+        # frpc, and a probe then measures the startup, not the tunnel.
+        self._next_probe_at = clock() + PROBE_INTERVAL_SECONDS
         # grant_id -> when its relay hold ends
         self._held_until: dict[str, float] = {}
         # grant_id -> (when the last hold ended, how long it was)

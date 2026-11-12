@@ -21,7 +21,9 @@ def _watch(results: dict[int, bool | None]) -> tuple[P2PWatch, Clock, list[int]]
         probed.append(port)
         return results[port]
 
-    return P2PWatch(probe=probe, clock=clock), clock, probed
+    watch = P2PWatch(probe=probe, clock=clock)
+    clock.now += p2p_watch.PROBE_INTERVAL_SECONDS
+    return watch, clock, probed
 
 
 def test_a_silent_tunnel_goes_to_the_relay_and_comes_back_after_the_hold() -> None:
@@ -41,6 +43,15 @@ def test_an_answering_or_unreachable_tunnel_stays_on_peer_to_peer() -> None:
 
     assert watch.check([("g1", 40000), ("g2", 40001)]) is False
     assert watch.relayed() == frozenset()
+
+
+def test_the_first_probe_waits_one_interval_after_start() -> None:
+    clock = Clock()
+    watch = P2PWatch(probe=lambda port: False, clock=clock)
+
+    assert watch.check([("g1", 40000)]) is False
+    clock.now += p2p_watch.PROBE_INTERVAL_SECONDS
+    assert watch.check([("g1", 40000)]) is True
 
 
 def test_probes_run_at_most_once_per_interval_and_skip_held_grants() -> None:

@@ -1027,6 +1027,10 @@ def test_sync_once_relays_a_stalled_ssh_grant_in_the_same_cycle(tmp_path, monkey
         probed.append(port)
         return False
 
+    now = [0.0]
+    watch = P2PWatch(probe=probe, clock=lambda: now[0])
+    now[0] += 3600  # past the first probe's delay
+
     driver = FakeDriver()
     poller.sync_once(
         state,
@@ -1034,7 +1038,7 @@ def test_sync_once_relays_a_stalled_ssh_grant_in_the_same_cycle(tmp_path, monkey
         data_dir=tmp_path,
         ssh_config_path=tmp_path / "ssh_config_real",
         port_range=_PORT_RANGE,
-        p2p_watch=P2PWatch(probe=probe),
+        p2p_watch=watch,
     )
 
     assert probed == [40000]  # the tcp grant has no banner to wait for

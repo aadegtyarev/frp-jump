@@ -246,7 +246,13 @@ class FrpDriver:
         self._config: dict | None = None
         self._admin: _AdminApi | None = None
 
-    def apply(self, desired: DesiredState, *, disable_p2p: bool = False) -> None:
+    def apply(
+        self,
+        desired: DesiredState,
+        *,
+        disable_p2p: bool = False,
+        relay_grants: Container[str] = frozenset(),
+    ) -> None:
         cert_file, key_file, ca_file, tls_changed = _write_tls_files(self._tls_dir, desired)
         config = build_frpc_config(
             desired,
@@ -255,6 +261,7 @@ class FrpDriver:
             ca_file=ca_file,
             fallback_timeout_ms=self._fallback_timeout_ms,
             disable_p2p=disable_p2p,
+            relay_grants=relay_grants,
         )
 
         fingerprint = _fingerprint(config)

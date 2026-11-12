@@ -207,6 +207,33 @@ straight away, or goes through the relay while the background keeps trying.
 per-connection secret is the real gate — frp's own `allowUsers` ACL is set to
 `*` and is not doing the work here.
 
+### When a tunnel opens but goes silent
+
+frpc falls back only when a tunnel fails to open. Once a punch succeeds, every
+new connection reuses that tunnel, and opening a connection on it never waits
+for the other side. Some networks let the punch through and then drop what
+follows: seen behind a full-tunnel WireGuard VPN, where the first connection
+after a punch works and the next ones hang. frpc keeps using the silent
+tunnel and never falls back.
+
+The agent checks for this itself, once a minute, for SSH connections only. It
+opens the local port and waits up to 15 seconds for the SSH banner. If the
+connection opens but nothing arrives, that one connection goes through the relay
+for 30 minutes, then peer-to-peer is tried again. A repeat stall soon after
+doubles the wait, up to 4 hours; an hour of working peer-to-peer resets it. The
+agent logs each switch:
+
+```text
+WARNING frp_jump.agent.p2p_watch: peer-to-peer tunnel on port 40000 is open but silent, using the relay for 30 min
+```
+
+Switching reloads only that connection's visitors. ssh sessions already open
+through the relay survive the switch back: frpc closes the visitor's listening
+port, not its relayed streams. Connections on other protocols are not checked,
+because their server waits for the client to speak first. Each check is one
+short connection to the exposing device's sshd, which logs it as a connection
+closed before authentication.
+
 ### When peer-to-peer can't work
 
 Some networks never punch through: a symmetric NAT, or a VPN that captures every
@@ -217,7 +244,8 @@ something that was never going to succeed.
 frp-jump-client set-p2p disabled
 ```
 
-That collapses the pair above into a single relayed visitor on this device. It
+That collapses the pair above into a single relayed visitor on this device, for
+every connection and without any checks. It
 affects only what this device dials out to — other devices can still reach *it*
 directly, because its exposing-side proxies are untouched. The setting lives in
 that device's own state, not on the server.

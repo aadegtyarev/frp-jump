@@ -25,6 +25,7 @@ regardless) that ends up genuinely p2p isn't silently sent in the clear.
 
 from __future__ import annotations
 
+from collections.abc import Container
 from pathlib import Path
 
 import tomli_w
@@ -75,6 +76,7 @@ def build_frpc_config(
     ca_file: str,
     fallback_timeout_ms: int,
     disable_p2p: bool = False,
+    relay_grants: Container[str] = frozenset(),
 ) -> dict:
     """Build the frpc config dict for one device's desired state.
 
@@ -87,6 +89,10 @@ def build_frpc_config(
     hole-punching can't succeed on this network (e.g. all traffic is
     forced through a VPN) and the retry/timeout churn that produces is
     worse than just always using the relay.
+
+    ``relay_grants`` does the same for single consumed grants: the
+    agent's own stall check (``agent/p2p_watch.py``) puts a grant here
+    for a while when its peer-to-peer tunnel is open but silent.
     """
     proxies: list[dict] = []
     for exposed in desired.exposed:
@@ -116,7 +122,7 @@ def build_frpc_config(
     visitors: list[dict] = []
     for consumed in desired.consumed:
         stcp_name = _stcp_visitor_name(consumed.grant_id)
-        if disable_p2p:
+        if disable_p2p or consumed.grant_id in relay_grants:
             visitors.append(
                 {
                     "name": stcp_name,

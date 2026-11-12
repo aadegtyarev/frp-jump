@@ -40,10 +40,12 @@ class FakeDriver:
     def __init__(self) -> None:
         self.applied = []
         self.disable_p2p_calls = []
+        self.relay_grants_calls = []
 
-    def apply(self, desired, *, disable_p2p=False) -> None:
+    def apply(self, desired, *, disable_p2p=False, relay_grants=frozenset()) -> None:
         self.applied.append(desired)
         self.disable_p2p_calls.append(disable_p2p)
+        self.relay_grants_calls.append(frozenset(relay_grants))
 
     def status(self):
         raise NotImplementedError
@@ -990,6 +992,77 @@ def test_sync_once_picks_up_p2p_disabled_by_a_concurrent_cli_command(tmp_path, m
     )
 
     assert driver.disable_p2p_calls == [True]
+
+
+def _consumed_ssh_and_tcp(monkeypatch) -> None:
+    def fake_post(url, *, json, headers, timeout):
+        return httpx.Response(204, request=httpx.Request("POST", url))
+
+    def fake_get(url, *, headers, timeout):
+        consumed = [
+            {
+                "grant_id": grant_id,
+                "secret": "s",
+                "protocol": protocol,
+                "exposer_device_name": "wb01",
+                "target_port": port,
+            }
+            for grant_id, protocol, port in (("g1", "ssh", 22), ("g2", "tcp", 80))
+        ]
+        remote = {"exposed": [], "consumed": consumed, "protocol_version": poller.PROTOCOL_VERSION}
+        return httpx.Response(200, json=remote, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(poller.httpx, "post", fake_post)
+    monkeypatch.setattr(poller.httpx, "get", fake_get)
+
+
+def test_sync_once_relays_a_stalled_ssh_grant_in_the_same_cycle(tmp_path, monkeypatch) -> None:
+    from frp_jump.agent.p2p_watch import P2PWatch
+
+    _consumed_ssh_and_tcp(monkeypatch)
+    state = _state(local_ports={"g1": 40000, "g2": 40001})
+    probed = []
+
+    def probe(port):
+        probed.append(port)
+        return False
+
+    driver = FakeDriver()
+    poller.sync_once(
+        state,
+        driver,
+        data_dir=tmp_path,
+        ssh_config_path=tmp_path / "ssh_config_real",
+        port_range=_PORT_RANGE,
+        p2p_watch=P2PWatch(probe=probe),
+    )
+
+    assert probed == [40000]  # the tcp grant has no banner to wait for
+    assert driver.relay_grants_calls == [frozenset(), frozenset({"g1"})]
+
+
+def test_sync_once_does_not_probe_while_p2p_is_disabled(tmp_path, monkeypatch) -> None:
+    from frp_jump.agent.p2p_watch import P2PWatch
+    from frp_jump.agent.state import save as save_state
+
+    _consumed_ssh_and_tcp(monkeypatch)
+    state = _state(local_ports={"g1": 40000, "g2": 40001}, disable_p2p=True)
+    save_state(tmp_path, state)
+
+    def probe(port):
+        raise AssertionError("probed with p2p disabled")
+
+    driver = FakeDriver()
+    poller.sync_once(
+        state,
+        driver,
+        data_dir=tmp_path,
+        ssh_config_path=tmp_path / "ssh_config_real",
+        port_range=_PORT_RANGE,
+        p2p_watch=P2PWatch(probe=probe),
+    )
+
+    assert driver.relay_grants_calls == [frozenset()]
 
 
 def test_disable_device_posts_to_the_disable_endpoint(monkeypatch) -> None:

@@ -6,6 +6,17 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+### Fixed
+
+- **An SSH connection hung for good once its peer-to-peer tunnel went
+  silent.** A punched tunnel is reused for every new connection, and frpc
+  falls back to the relay only when a tunnel fails to open, not when it
+  opens and then carries nothing. Behind a full-tunnel WireGuard VPN nearly
+  every connection to two controllers hung this way. The agent now checks
+  each SSH connection's tunnel once a minute by waiting for the SSH banner;
+  a silent one goes through the relay for 30 minutes (doubling up to 4 hours
+  on repeat stalls), then peer-to-peer is tried again.
+
 ## [0.3.23] - 2026-11-06
 
 ### Fixed

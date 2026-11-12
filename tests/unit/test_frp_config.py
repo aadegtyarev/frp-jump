@@ -106,6 +106,28 @@ def test_frpc_config_disable_p2p_skips_xtcp_visitor_entirely() -> None:
     assert stcp_visitor["bindPort"] == 2222
 
 
+def test_frpc_config_relay_grants_relays_only_those_grants() -> None:
+    desired = _desired(
+        consumed=(
+            ConsumedGrant(grant_id="g1", secret="s1", local_bind_port=2221),
+            ConsumedGrant(grant_id="g2", secret="s2", local_bind_port=2222),
+        )
+    )
+    config = build_frpc_config(
+        desired,
+        cert_file="c.crt",
+        key_file="c.key",
+        ca_file="ca.crt",
+        fallback_timeout_ms=500,
+        relay_grants={"g2"},
+    )
+
+    visitors = {v["name"]: v for v in config["visitors"]}
+    assert set(visitors) == {"g1-stcp-visitor", "g1-xtcp-visitor", "g2-stcp-visitor"}
+    assert visitors["g1-xtcp-visitor"]["bindPort"] == 2221
+    assert visitors["g2-stcp-visitor"]["bindPort"] == 2222
+
+
 def test_frpc_config_disable_p2p_still_exposes_xtcp_proxy() -> None:
     """Only this device's own *consuming* side opts out -- other devices
     should still be able to reach it peer-to-peer."""

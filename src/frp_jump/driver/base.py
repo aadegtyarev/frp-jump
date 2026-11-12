@@ -8,6 +8,7 @@ outside ``driver/`` should assume that.
 
 from __future__ import annotations
 
+from collections.abc import Container
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
@@ -93,14 +94,21 @@ class DriverStatus:
 class TunnelDriver(Protocol):
     """Device-side driver: exposes and/or consumes grants through the relay."""
 
-    def apply(self, desired: DesiredState, *, disable_p2p: bool = False) -> None:
+    def apply(
+        self,
+        desired: DesiredState,
+        *,
+        disable_p2p: bool = False,
+        relay_grants: Container[str] = frozenset(),
+    ) -> None:
         """Converge the running tunnel client to match ``desired``.
 
         ``disable_p2p`` is a per-device setting (`state.json`, toggled by
         `set-p2p`), not part of ``desired`` itself -- passed per call, not
         baked in at construction, so a long-running `run` daemon picks up
         a toggle on its very next poll cycle same as it would a grant
-        change, no restart needed."""
+        change, no restart needed. ``relay_grants`` narrows the same thing
+        to single consumed grants (see ``agent/p2p_watch.py``)."""
         ...
 
     def status(self) -> DriverStatus:

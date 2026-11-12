@@ -15,6 +15,7 @@ import httpx
 
 from frp_jump.agent import hosts
 from frp_jump.agent.device_kind import detect_kind
+from frp_jump.agent.p2p_watch import P2PWatch
 from frp_jump.agent.state import AgentState, load, locked, save, wake_path
 from frp_jump.common import ssh_signing
 from frp_jump.common.api import (
@@ -566,6 +567,7 @@ def sync_once(
     agent_version: str | None = None,
     kind: str | None = None,
     revalidate_ports: bool = False,
+    p2p_watch: P2PWatch | None = None,
 ) -> DesiredState:
     """One full cycle: heartbeat, pull desired state, apply it, refresh ssh config.
 
@@ -591,6 +593,11 @@ def sync_once(
     the server, then saves its profile and pin. A cycle that had already
     reloaded saw the new grant from the server, allocated a port for it,
     and saved over the profile and the pin.
+
+    ``p2p_watch``: after applying, probe the SSH grants still on
+    peer-to-peer and re-apply at once if one of them stalled -- see
+    ``agent/p2p_watch.py``. Skipped while `set-p2p disabled` is on, since
+    then nothing is peer-to-peer.
     """
     send_heartbeat(state, agent_version=agent_version, kind=kind)
     remote = fetch_desired_state(state)
@@ -604,8 +611,17 @@ def sync_once(
         desired = build_desired_state(
             state, remote, data_dir=data_dir, port_range=port_range, revalidate=revalidate_ports
         )
-    driver.apply(desired, disable_p2p=state.disable_p2p)
+    relay_grants = p2p_watch.relayed() if p2p_watch is not None else frozenset()
+    driver.apply(desired, disable_p2p=state.disable_p2p, relay_grants=relay_grants)
     sync_ssh_config(state, remote, data_dir=data_dir, ssh_config_path=ssh_config_path)
+    if p2p_watch is not None and not state.disable_p2p:
+        ssh_grants = [
+            (g["grant_id"], state.local_ports[g["grant_id"]])
+            for g in remote["consumed"]
+            if g["protocol"] == ServiceProtocol.SSH.value
+        ]
+        if p2p_watch.check(ssh_grants):
+            driver.apply(desired, disable_p2p=state.disable_p2p, relay_grants=p2p_watch.relayed())
     return desired
 
 
@@ -649,6 +665,7 @@ def run_forever(
     # after a (re)start -- see build_desired_state's docstring for why this
     # must not happen on every cycle.
     first_cycle = True
+    p2p_watch = P2PWatch()
     backoff = BACKOFF_INITIAL_SECONDS
     while True:
         try:
@@ -661,6 +678,7 @@ def run_forever(
                 agent_version=agent_version,
                 kind=kind,
                 revalidate_ports=first_cycle,
+                p2p_watch=p2p_watch,
             )
             first_cycle = False
             backoff = BACKOFF_INITIAL_SECONDS

@@ -1,0 +1,40 @@
+Architectures: amd64 arm64 armhf
+Codename: stable
+Components: main
+Date: Thu, 12 Nov 2026 22:09:04 +0000
+Description: frp-jump package repository
+Label: frp-jump
+Origin: frp-jump
+Suite: stable
+MD5Sum:
+ 50e1cccd9d81b8d7b5b9da02b237a7e1              193 Release
+ bdf7f3db0b31c8a4382152bd86f76c4c              783 main/binary-amd64/Packages
+ 00ffa27e93fc8a593d916d9238bec06a              530 main/binary-amd64/Packages.gz
+ 1be112c51760f5e933a19552299c9e8c              783 main/binary-arm64/Packages
+ 0e5c9d1ea48f1d16c92b7938afbe4477              534 main/binary-arm64/Packages.gz
+ c630b0ee90d9629f4bb34d5374385838              783 main/binary-armhf/Packages
+ 11f25c9e9d9044fd6cb1f029ab7a1f48              532 main/binary-armhf/Packages.gz
+SHA1:
+ 80e203c04c8f52c2e31d5b5325a148ca9a650df5              193 Release
+ 030af14a623e0d912c08bee416a547649cf8de26              783 main/binary-amd64/Packages
+ bc921e37a9cc8287c777e014ef19413816c1649b              530 main/binary-amd64/Packages.gz
+ 1e904fb7810da0586f54419a66c5e3e5d40f47ab              783 main/binary-arm64/Packages
+ ea7bbadfb6ec898fdbf03443ee18f83494a96bb6              534 main/binary-arm64/Packages.gz
+ 9c58c7083247966052a6bd509d5d77b34135c10d              783 main/binary-armhf/Packages
+ aad8065621ffa94d0a7585e67443afd92ab7afd8              532 main/binary-armhf/Packages.gz
+SHA256:
+ 3f412e27ee1c775baa423469a31820d4aa4b7609ed29f675312da590e8e4b94c              193 Release
+ 839f0208fe8e811f5a7f158c906693bd74eed076d10033bf8dfed7a887f645c5              783 main/binary-amd64/Packages
+ 3b392f4012dbf9c41149663fd64a7530586bef8f1703a00cc06e9095ee7c1d4c              530 main/binary-amd64/Packages.gz
+ f94c533848dd0d059be5735e77dafcaf2ca43263874893e6c5967fa301897cf4              783 main/binary-arm64/Packages
+ dd72676e837c098373d0128c69180a0339065e122151bc8f30545e0a11beecb6              534 main/binary-arm64/Packages.gz
+ 8eafbd66cea753d843a09b1e8e41c00fb39e7828bd38bcd4401f68a7dcddf316              783 main/binary-armhf/Packages
+ 45d5e35c7e975e66f1b9b0bd98ca1d02bf858d0e788a9bc15b314e9ac6483e7c              532 main/binary-armhf/Packages.gz
+SHA512:
+ 5adf39159c9ec59380a177b3ed3ae2d48bdaa6fcd0c29090613dc6775b74bb47fe8b4786334856112a338fc85ad300ba3feba2325bc59c97c910c8b464502b3e              193 Release
+ 443e6e4b8d7d8cc9b28d1edab686e46f4d58ed8656769f1b3fbc43af8ab12020ed93c61020dc649ca1ce2b5333d42c5bc022ac9661c60666fb2c93e71e693639              783 main/binary-amd64/Packages
+ 49f835c45a58b81e24993bbe8825feb1308bae5cd1d8a2d3c0c07b9f61a9f0bd84d389768b2155c8d95cb776c3a6fe7c3991eefa288000cf450d98d96281db31              530 main/binary-amd64/Packages.gz
+ a8a0002ea047f6411a127d958d2b1b8030b3df728f354fdb8407fc700962882c194d7be6dc3e8892a9cf7665b45e71214e669d8a8e081dfb6e594a8d5c2a84c3              783 main/binary-arm64/Packages
+ ffec9f695c1d4dbaa945bb99b6308719b1c9af668e2f047b7a418c3e4fb26cde1591b52b81d43e490d606e34e11a48b3c29451b1f626529b10951040c4880b5b              534 main/binary-arm64/Packages.gz
+ 0c2ef680f1e15718a4cb16ecd6d546caced027d0c62948e7debd270a092864bc2afcfd76e3fcf5c7b79dbd9bf0739ba67f2230f17245bba29ad943e3037e0e50              783 main/binary-armhf/Packages
+ 59d155fdbda0e8afbb670d9e0f987040a3b0915e875b5ccf13ddf27d2508a2ebdd122ee83d26e1a338acb10260cf5d96f28f04e7dce95ad92fc939eb320b6279              532 main/binary-armhf/Packages.gz

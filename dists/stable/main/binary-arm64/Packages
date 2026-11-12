@@ -1,0 +1,19 @@
+Package: frp-jump-client
+Version: 0.3.24
+Architecture: arm64
+Maintainer: Alexander Degtyarev <a.degtyarev@struhe.com>
+Recommends: tmux
+Filename: pool/main/frp-jump-client_0.3.24_arm64.deb
+Size: 20425940
+MD5sum: f56d91d80778f291ce8062cc18c24d17
+SHA1: 91bc7276b3cd18762739d7a64d78c7bac2e50603
+SHA256: 8f7b0ff81db647e0dddbd232bdc099afe254ac77036b1db02a387fd567897265
+Section: net
+Priority: optional
+Homepage: https://github.com/aadegtyarev/frp-jump
+Description: frp-jump tunnel agent (self-contained)
+ P2P-with-relay-fallback ssh/http/tcp tunnel client agent. Ships its own
+ Python 3.12 runtime under /opt/frp-jump-client -- does not touch or
+ require the system Python/pip. Recommends tmux: with it the frp-jump
+ Android app keeps terminal sessions alive across a dropped connection.
+

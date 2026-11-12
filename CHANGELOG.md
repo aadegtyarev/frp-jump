@@ -6,6 +6,8 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.24] - 2026-11-13
+
 ### Fixed
 
 - **An SSH connection hung for good once its peer-to-peer tunnel went

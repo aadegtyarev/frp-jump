@@ -127,7 +127,10 @@ def test_grant_proxies_traffic_from_consumer_to_exposer(tmp_path, frp_binaries) 
             last_error: Exception | None = None
             while time.monotonic() < deadline:
                 try:
-                    resp = httpx.get(f"http://127.0.0.1:{local_bind_port}", timeout=1.0)
+                    # Longer than fallback_timeout_ms: until a punch completes
+                    # in the background, a connection waits that long before
+                    # frpc relays it.
+                    resp = httpx.get(f"http://127.0.0.1:{local_bind_port}", timeout=5.0)
                     if resp.status_code == 200:
                         assert resp.content == b"hello from exposer"
                         return
@@ -223,7 +226,7 @@ def test_frps_rejects_a_client_whose_cert_chains_to_a_different_ca(tmp_path, frp
             deadline = time.monotonic() + 8.0
             while time.monotonic() < deadline:
                 with contextlib.suppress(httpx.HTTPError):
-                    resp = httpx.get(f"http://127.0.0.1:{local_bind_port}", timeout=1.0)
+                    resp = httpx.get(f"http://127.0.0.1:{local_bind_port}", timeout=5.0)
                     assert resp.status_code != 200, (
                         "tunnel came up despite the exposer's cert chaining to a "
                         "different CA than frps trusts -- mTLS enforcement is broken"

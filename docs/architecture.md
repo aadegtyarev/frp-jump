@@ -166,6 +166,15 @@ it; retry"), and a schema version newer than the code knows. It never guesses
 its way through a schema it does not know. A 0.3.x server has no runner, names
 the columns it selects, and so ignores both the new columns and the table.
 
+After migrating, the runner switches the file to SQLite's WAL journal, once,
+since the mode is stored in the file. The relay policy reads the database on
+every frpc ping, and in the default rollback journal a slow commit locked those
+reads out: the ping was rejected and frps dropped all of that client's tunnels.
+In WAL mode reads never wait for a write. Two consequences: the database has
+`-wal` and `-shm` files next to it, so a copy must include them or be taken
+with `sqlite3 db.sqlite3 .backup`, and a reader needs write access to the data
+directory, which admin commands have by running as the service account.
+
 ### Accepted, not enforced
 
 Nothing rate-limits how many enroll tokens a device mints, or how many services

@@ -165,7 +165,10 @@ def migrate_file(path: Path | str) -> None:
         # the relay policy's read fail with "database is locked", frps took
         # that as a rejected Ping and dropped every tunnel of the client.
         # The mode is stored in the file, so setting it once is enough.
-        conn.execute("PRAGMA journal_mode=WAL")
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError as exc:
+            raise _busy() from exc
     finally:
         conn.close()
 

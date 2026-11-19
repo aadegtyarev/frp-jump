@@ -6,6 +6,8 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+## [0.3.25] - 2026-11-20
+
 ### Fixed
 
 - **Every tunnel of a device dropped at once when the server's disk was

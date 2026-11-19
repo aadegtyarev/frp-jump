@@ -122,6 +122,12 @@ jobs:
           mkdir -m 700 -p "$GNUPGHOME"
           echo "${{ secrets.APT_SIGNING_KEY }}" | gpg --batch --import
 
+      - name: Install the repo tools
+        # ubuntu-latest no longer ships apt-utils (apt-ftparchive).
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends apt-utils dpkg-dev
+
       - name: Build the signed repo tree
         env:
           GNUPGHOME: ${{ runner.temp }}/gnupg

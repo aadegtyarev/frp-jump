@@ -134,10 +134,13 @@ def test_memory_database_is_migrated_on_the_shared_connection():
 
 
 @needs_non_root
-def test_second_open_writes_nothing(tmp_path, read_only, monkeypatch):
+def test_second_open_writes_nothing(tmp_path, monkeypatch):
     path = tmp_path / "db.sqlite3"
     make_engine(path).dispose()
-    read_only(path)
+    # Only the file: a WAL reader still needs the directory to create its
+    # -shm index, which is why admin commands run as the service account.
+    mode = path.stat().st_mode
+    path.chmod(0o444)
 
     def no_writes(conn):
         raise AssertionError("an up-to-date database must not be written")
@@ -147,6 +150,7 @@ def test_second_open_writes_nothing(tmp_path, read_only, monkeypatch):
     with make_session(engine) as db:
         assert db.exec(select(Device)).all() == []
     engine.dispose()
+    path.chmod(mode)
 
 
 @needs_non_root
@@ -318,3 +322,21 @@ def test_add_column_treats_duplicate_column_as_applied(tmp_path):
     with pytest.raises(sqlite3.OperationalError, match="no such table"):
         migrations._add_column(conn, "missing", "label")
     conn.close()
+
+
+def test_file_database_uses_wal_so_readers_do_not_wait_for_writers(tmp_path):
+    path = tmp_path / "db.sqlite3"
+    make_engine(path).dispose()
+
+    writer = sqlite3.connect(path, isolation_level=None)
+    # In rollback-journal mode an exclusive lock (what a commit takes)
+    # locks every reader out; in WAL mode it does not.
+    writer.execute("BEGIN EXCLUSIVE")
+    try:
+        reader = sqlite3.connect(path, timeout=0)
+        assert reader.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert reader.execute("SELECT count(*) FROM devices").fetchone()[0] == 0
+        reader.close()
+    finally:
+        writer.execute("ROLLBACK")
+        writer.close()

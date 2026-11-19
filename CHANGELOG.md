@@ -6,6 +6,19 @@ follow [SemVer](https://semver.org/) once something is tagged/released.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every tunnel of a device dropped at once when the server's disk was
+  busy.** frps asks the control plane to authorize each client ping. On a
+  slow commit the database answered "database is locked", the ping was
+  rejected ("relay operation not authorized") and frps closed the client's
+  control connection with all its tunnels. Seen several times a week on a
+  shared VPS, and seven times in one night during a Docker build. The server
+  database now uses SQLite's WAL journal, in which reads never wait for a
+  write; the first start of this release switches the file over. Admin
+  commands still run as the service account: a WAL reader needs to write its
+  index file next to the database.
+
 ## [0.3.24] - 2026-11-13
 
 ### Fixed

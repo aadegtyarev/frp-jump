@@ -160,6 +160,12 @@ def migrate_file(path: Path | str) -> None:
     conn = sqlite3.connect(path, isolation_level=None, timeout=LOCK_TIMEOUT_SECONDS)
     try:
         migrate_connection(conn, str(path))
+        # Readers never wait for a writer in WAL mode. In the default
+        # rollback journal, a commit that fsyncs slowly on a busy disk made
+        # the relay policy's read fail with "database is locked", frps took
+        # that as a rejected Ping and dropped every tunnel of the client.
+        # The mode is stored in the file, so setting it once is enough.
+        conn.execute("PRAGMA journal_mode=WAL")
     finally:
         conn.close()
 
